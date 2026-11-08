@@ -5,12 +5,12 @@ import { fileURLToPath } from 'node:url';
 import { SAMPLE_BOTTLES, SAMPLE_PHOTOS } from '../src/data/sampleData';
 import { SAKE_CATEGORIES, BOTTLE_STATUSES, BottleRecord } from '../src/types/sake';
 import { CATEGORY_ATTRIBUTE_LABELS } from '../src/domain/categories';
+import { isValidCalendarDate } from '../src/domain/validation';
 
 const __filename = fileURLToPath(import.meta.url);
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/;
-const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const HASH_HEX_REGEX = /^[0-9a-f]{64}$/i;
 
 function assert(condition: boolean, message: string): asserts condition {
@@ -76,13 +76,13 @@ function verifySampleData(): void {
     }
 
     if (bottle.openedDate !== null) {
-      assert(DATE_REGEX.test(bottle.openedDate), `openedDate が YYYY-MM-DD 形式ではありません: ${bottle.openedDate}`);
+      assert(isValidCalendarDate(bottle.openedDate), `openedDate が実在する有効な日付ではありません: ${bottle.openedDate}`);
     }
     if (bottle.finishedDate !== null) {
-      assert(DATE_REGEX.test(bottle.finishedDate), `finishedDate が YYYY-MM-DD 形式ではありません: ${bottle.finishedDate}`);
+      assert(isValidCalendarDate(bottle.finishedDate), `finishedDate が実在する有効な日付ではありません: ${bottle.finishedDate}`);
     }
     if (bottle.disposedDate !== null) {
-      assert(DATE_REGEX.test(bottle.disposedDate), `disposedDate が YYYY-MM-DD 形式ではありません: ${bottle.disposedDate}`);
+      assert(isValidCalendarDate(bottle.disposedDate), `disposedDate が実在する有効な日付ではありません: ${bottle.disposedDate}`);
     }
 
     // 種類別追加属性のキー検査（許可された属性キーのみが存在するか）
@@ -123,6 +123,9 @@ function verifySampleData(): void {
         `購入価格は正の数値または null である必要があります: ${bottle.id}`
       );
     }
+    if (bottle.purchaseInfo.purchaseDate !== null) {
+      assert(isValidCalendarDate(bottle.purchaseInfo.purchaseDate), `購入日が実在する有効な日付ではありません: ${bottle.purchaseInfo.purchaseDate}`);
+    }
     if (bottle.referencePrice !== null) {
       if (bottle.referencePrice.estimatedPriceYen !== null) {
         assert(
@@ -132,8 +135,8 @@ function verifySampleData(): void {
       }
       if (bottle.referencePrice.fetchedDate !== null) {
         assert(
-          DATE_REGEX.test(bottle.referencePrice.fetchedDate),
-          `相場目安取得日は YYYY-MM-DD 形式である必要があります: ${bottle.referencePrice.fetchedDate}`
+          isValidCalendarDate(bottle.referencePrice.fetchedDate),
+          `相場目安取得日が実在する有効な日付ではありません: ${bottle.referencePrice.fetchedDate}`
         );
       }
     }
@@ -197,10 +200,16 @@ function verifySampleData(): void {
     );
   }
 
-  // ボトル側から写真への参照整合性
+  // ボトル側から写真への参照整合性 (photo.bottleId との一致確認)
+  const photoMap = new Map(SAMPLE_PHOTOS.map((p) => [p.id, p]));
   for (const bottle of SAMPLE_BOTTLES) {
     for (const photoId of bottle.photoIds) {
-      assert(photoIdSet.has(photoId), `Bottle ${bottle.id} の photoId ${photoId} が SAMPLE_PHOTOS に存在しません`);
+      const photo = photoMap.get(photoId);
+      assert(photo !== undefined, `Bottle ${bottle.id} の photoId ${photoId} が SAMPLE_PHOTOS に存在しません`);
+      assert(
+        photo.bottleId === bottle.id,
+        `Bottle ${bottle.id} の photoIds に含まれる写真 ${photoId} の bottleId (${photo.bottleId}) が一致しません`
+      );
     }
     if (bottle.primaryPhotoId !== null) {
       assert(
