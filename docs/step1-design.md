@@ -75,11 +75,12 @@
 完了条件：ドキュメントと開発ルールが main に配置されていること。直後に main のブランチ保護（PR 必須・直接 push 禁止・バイパス不可）を設定する。
 
 ### PR #1 feat/step1-scaffold-and-verify
-環境構築・全データモデル型定義・サンプルデータ・検証基盤。
+環境構築・全データモデル型定義・サンプルデータ・検証基盤・GitHub Actions。
 - Vite + React + TypeScript + Tailwind CSS + Vitest + ESLint の雛形
 - 全データモデル型定義（src/types/sake.ts）と固定10種類定義（src/domain/categories.ts）
 - 受入確認用サンプルデータ（src/data/sampleData.ts）
 - データ検証スクリプト（scripts/verify-data.ts）と npm run verify の確立
+- GitHub Actions CI ワークフロー（.github/workflows/verify.yml）
 完了条件：npm run verify（data → types → lint → test → build）が exit 0。
 
 ### PR #2 feat/step1-domain-logic
@@ -106,6 +107,9 @@ IndexedDB 永続化レイヤーと状態管理。
 
 ```
 sake-collection/
+├── .github/
+│   └── workflows/
+│       └── verify.yml               [PR#1]
 ├── AGENTS.md                        [Step0]
 ├── README.md                        [Step0]
 ├── docs/

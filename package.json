@@ -1,0 +1,41 @@
+{
+  "name": "sake-collection",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "verify": "npm run verify:data && npm run verify:types && npm run verify:lint && npm run verify:test && npm run verify:build",
+    "verify:data": "tsx scripts/verify-data.ts",
+    "verify:types": "tsc --noEmit",
+    "verify:lint": "eslint . --max-warnings 0",
+    "verify:test": "vitest run",
+    "verify:build": "vite build"
+  },
+  "dependencies": {
+    "idb": "^8.0.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.15.0",
+    "@types/node": "^22.9.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^9.15.0",
+    "eslint-plugin-react-hooks": "^5.0.0",
+    "eslint-plugin-react-refresh": "^0.4.14",
+    "globals": "^15.12.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.15",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.15.0",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.5"
+  }
+}
