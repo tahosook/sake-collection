@@ -26,7 +26,6 @@ export interface SakeCollectionDBSchema extends DBSchema {
       by_category: SakeCategory;
       by_status: BottleStatus;
       by_updatedAt: string;
-      by_deleted: number; // 0 or 1 (boolean index)
     };
   };
   photos: {
@@ -35,7 +34,6 @@ export interface SakeCollectionDBSchema extends DBSchema {
     indexes: {
       by_bottleId: string;
       by_updatedAt: string;
-      by_deleted: number; // 0 or 1
     };
   };
   meta: {
@@ -45,52 +43,77 @@ export interface SakeCollectionDBSchema extends DBSchema {
 }
 
 let dbInstance: IDBPDatabase<SakeCollectionDBSchema> | null = null;
+let dbPromise: Promise<IDBPDatabase<SakeCollectionDBSchema>> | null = null;
 
 /**
  * IndexedDB 接続を開く（シングルトン接続）
+ * 同時呼び出し時は接続開始中の Promise を共有する
  */
 export async function getDb(): Promise<IDBPDatabase<SakeCollectionDBSchema>> {
   if (dbInstance) {
     return dbInstance;
   }
 
-  dbInstance = await openDB<SakeCollectionDBSchema>(DB_NAME, DB_VERSION, {
-    upgrade(db) {
-      // 1. bottles ストア
-      if (!db.objectStoreNames.contains('bottles')) {
-        const bottleStore = db.createObjectStore('bottles', { keyPath: 'id' });
-        bottleStore.createIndex('by_category', 'category');
-        bottleStore.createIndex('by_status', 'status');
-        bottleStore.createIndex('by_updatedAt', 'updatedAt');
-        // boolean のインデックス検索用にキーパスをマップ、またはコード側でフィルタ
-        bottleStore.createIndex('by_deleted', 'deleted');
-      }
+  if (!dbPromise) {
+    dbPromise = (async () => {
+      try {
+        const db = await openDB<SakeCollectionDBSchema>(DB_NAME, DB_VERSION, {
+          upgrade(db) {
+            // 1. bottles ストア
+            if (!db.objectStoreNames.contains('bottles')) {
+              const bottleStore = db.createObjectStore('bottles', { keyPath: 'id' });
+              bottleStore.createIndex('by_category', 'category');
+              bottleStore.createIndex('by_status', 'status');
+              bottleStore.createIndex('by_updatedAt', 'updatedAt');
+            }
 
-      // 2. photos ストア
-      if (!db.objectStoreNames.contains('photos')) {
-        const photoStore = db.createObjectStore('photos', { keyPath: 'id' });
-        photoStore.createIndex('by_bottleId', 'bottleId');
-        photoStore.createIndex('by_updatedAt', 'updatedAt');
-        photoStore.createIndex('by_deleted', 'deleted');
-      }
+            // 2. photos ストア
+            if (!db.objectStoreNames.contains('photos')) {
+              const photoStore = db.createObjectStore('photos', { keyPath: 'id' });
+              photoStore.createIndex('by_bottleId', 'bottleId');
+              photoStore.createIndex('by_updatedAt', 'updatedAt');
+            }
 
-      // 3. meta ストア
-      if (!db.objectStoreNames.contains('meta')) {
-        db.createObjectStore('meta', { keyPath: 'key' });
+            // 3. meta ストア
+            if (!db.objectStoreNames.contains('meta')) {
+              db.createObjectStore('meta', { keyPath: 'key' });
+            }
+          },
+        });
+        dbInstance = db;
+        return db;
+      } catch (err) {
+        dbPromise = null;
+        throw err;
       }
-    },
-  });
+    })();
+  }
 
-  return dbInstance;
+  return dbPromise;
 }
 
 /**
- * テスト用・リセット用：DB接続を閉じてシングルトンを破棄
+ * テスト用・リセット用：DB接続を閉じてシングルトンおよび保持した Promise を破棄
  */
 export function closeDb(): void {
   if (dbInstance) {
     dbInstance.close();
     dbInstance = null;
+  }
+  if (dbPromise) {
+    const pending = dbPromise;
+    dbPromise = null;
+    void pending
+      .then((db) => {
+        try {
+          db.close();
+        } catch {
+          // すでにクローズ済みの場合は無視
+        }
+      })
+      .catch(() => {
+        // 接続開始時の例外は無視
+      });
   }
 }
 

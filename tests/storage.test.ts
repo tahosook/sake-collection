@@ -42,6 +42,33 @@ describe('storage (IndexedDB 永続化レイヤー) テスト', () => {
       expect(db.objectStoreNames.contains('meta')).toBe(true);
     });
 
+    it('ボトルおよび写真ストアに by_deleted インデックスが存在せず適切なインデックスのみ定義されていること', async () => {
+      const db = await getDb();
+      const tx = db.transaction(['bottles', 'photos'], 'readonly');
+
+      const bottleStore = tx.objectStore('bottles');
+      expect(bottleStore.indexNames.contains('by_category')).toBe(true);
+      expect(bottleStore.indexNames.contains('by_status')).toBe(true);
+      expect(bottleStore.indexNames.contains('by_updatedAt')).toBe(true);
+      const bottleIndexes: string[] = Array.from(bottleStore.indexNames);
+      expect(bottleIndexes).not.toContain('by_deleted');
+
+      const photoStore = tx.objectStore('photos');
+      expect(photoStore.indexNames.contains('by_bottleId')).toBe(true);
+      expect(photoStore.indexNames.contains('by_updatedAt')).toBe(true);
+      const photoIndexes: string[] = Array.from(photoStore.indexNames);
+      expect(photoIndexes).not.toContain('by_deleted');
+
+      await tx.done;
+    });
+
+    it('getDb の同時呼び出しで同一の接続インスタンスが共有されること', async () => {
+      closeDb(); // 一旦切断して未接続状態にする
+      const [db1, db2, db3] = await Promise.all([getDb(), getDb(), getDb()]);
+      expect(db1).toBe(db2);
+      expect(db2).toBe(db3);
+    });
+
     it('メタデータの保存と取得が動作すること', async () => {
       await setMeta('appName', 'sake-collection');
       const val = await getMeta<string>('appName');
