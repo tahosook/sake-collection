@@ -1,0 +1,17 @@
+# dependencies / build
+node_modules/
+dist/
+
+# local-only data (実データ・実写真はリポジトリに入れない)
+local-data/
+*.local.json
+
+# real photos must never be committed (サンプルは生成画像のみをコードで扱う)
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.heic
+
+# misc
+.DS_Store
