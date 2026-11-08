@@ -291,38 +291,47 @@ export const App: React.FC = () => {
       </main>
 
       {/* 同一銘柄展開モーダルシート */}
-      <GroupDetailSheet
-        group={selectedGroupForSheet}
-        onClose={() => setSelectedGroupForSheet(null)}
-        onSelectBottle={(bottle) => {
-          setSelectedBottleForDetail(bottle);
-        }}
-      />
+      {selectedGroupForSheet && (
+        <GroupDetailSheet
+          key={selectedGroupForSheet.groupKey}
+          group={selectedGroupForSheet}
+          onClose={() => setSelectedGroupForSheet(null)}
+          onSelectBottle={(bottle) => {
+            setSelectedBottleForDetail(bottle);
+          }}
+        />
+      )}
 
       {/* ボトル詳細モーダル */}
-      <BottleDetailModal
-        bottle={selectedBottleForDetail}
-        photos={photos}
-        onClose={() => setSelectedBottleForDetail(null)}
-        onEdit={handleOpenEdit}
-        onDelete={async (id) => {
-          await deleteBottle(id);
-          setSelectedBottleForDetail(null);
-        }}
-        onChangeStatus={handleChangeStatus}
-        onToggleWantToBuyAgain={handleToggleWantToBuyAgain}
-      />
+      {selectedBottleForDetail && (
+        <BottleDetailModal
+          key={selectedBottleForDetail.id}
+          bottle={selectedBottleForDetail}
+          photos={photos}
+          onClose={() => setSelectedBottleForDetail(null)}
+          onEdit={handleOpenEdit}
+          onDelete={async (id) => {
+            await deleteBottle(id);
+            setSelectedBottleForDetail(null);
+          }}
+          onChangeStatus={handleChangeStatus}
+          onToggleWantToBuyAgain={handleToggleWantToBuyAgain}
+        />
+      )}
 
       {/* ボトル登録・編集モーダル */}
-      <BottleFormModal
-        initialBottle={editingBottle}
-        isOpen={isFormModalOpen}
-        onClose={() => {
-          setIsFormModalOpen(false);
-          setEditingBottle(null);
-        }}
-        onSubmit={handleFormSubmit}
-      />
+      {isFormModalOpen && (
+        <BottleFormModal
+          key={editingBottle ? `edit-${editingBottle.id}` : 'create'}
+          initialBottle={editingBottle}
+          isOpen={isFormModalOpen}
+          onClose={() => {
+            setIsFormModalOpen(false);
+            setEditingBottle(null);
+          }}
+          onSubmit={handleFormSubmit}
+        />
+      )}
 
       {/* 主要ボトムナビゲーション */}
       <Navigation

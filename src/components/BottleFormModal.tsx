@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   BottleRecord,
   SakeCategory,
@@ -76,6 +76,43 @@ export const BottleFormModal: React.FC<BottleFormModalProps> = ({
   // バリデーションエラー
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+
+  // モーダルが開かれた時、または対象ボトルが切り替わった時に全項目を初期化
+  useEffect(() => {
+    if (!isOpen) return;
+
+    setName(initialBottle?.name ?? '');
+    setCategory(initialBottle?.category ?? '日本酒');
+    setStatus(initialBottle?.status ?? 'unopened');
+    setVolumeMl(
+      initialBottle?.volumeMl !== null && initialBottle?.volumeMl !== undefined
+        ? String(initialBottle.volumeMl)
+        : ''
+    );
+    setAbv(
+      initialBottle?.abv !== null && initialBottle?.abv !== undefined
+        ? String(initialBottle.abv)
+        : ''
+    );
+    setOpenedDate(initialBottle?.openedDate ?? '');
+    setFinishedDate(initialBottle?.finishedDate ?? '');
+    setDisposedDate(initialBottle?.disposedDate ?? '');
+    setAttributes(
+      (initialBottle?.categoryAttributes as Record<string, string | number>) ?? {}
+    );
+    setPurchaseDate(initialBottle?.purchaseInfo.purchaseDate ?? '');
+    setPurchasePlace(initialBottle?.purchaseInfo.purchasePlace ?? '');
+    setPurchasePriceYen(
+      initialBottle?.purchaseInfo.purchasePriceYen !== null &&
+        initialBottle?.purchaseInfo.purchasePriceYen !== undefined
+        ? String(initialBottle.purchaseInfo.purchasePriceYen)
+        : ''
+    );
+    setTastingNote(initialBottle?.tastingNote ?? '');
+    setWantToBuyAgain(initialBottle?.wantToBuyAgain ?? false);
+    setErrorMessage(null);
+    setIsSubmitting(false);
+  }, [isOpen, initialBottle]);
 
   if (!isOpen) return null;
 

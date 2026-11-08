@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BottleRecord, PhotoRecord, BottleStatus } from '../types/sake';
 import { StatusBadge, CategoryBadge } from './Badge';
 import { STATUS_LABELS } from '../domain/status';
@@ -40,6 +40,14 @@ export const BottleDetailModal: React.FC<BottleDetailModalProps> = ({
   const [selectedNewStatus, setSelectedNewStatus] = useState<BottleStatus | null>(null);
   const [statusDateInput, setStatusDateInput] = useState<string>(getTodayDateString());
   const [isDeleting, setIsDeleting] = useState<boolean>(false);
+
+  // ボトルが切り替わった場合（別ボトル表示時）に内部状態をリセット
+  useEffect(() => {
+    setActivePhotoIndex(0);
+    setIsChangingStatus(false);
+    setSelectedNewStatus(null);
+    setStatusDateInput(getTodayDateString());
+  }, [bottle?.id]);
 
   if (!bottle) return null;
 
