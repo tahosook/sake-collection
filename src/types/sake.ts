@@ -123,8 +123,8 @@ export interface ReferencePriceInfo {
   note?: string;                    // 容量条件などの補足（任意）
 }
 
-/** ボトル1本レコード（1本＝1レコード、最初から同期前提） */
-export interface BottleRecord<C extends SakeCategory = SakeCategory> {
+/** ボトル1本レコードの基底インターフェース */
+export interface BottleRecordBase<C extends SakeCategory> {
   // 同期・識別メタデータ
   id: string;                  // UUID v4
   createdAt: string;           // ISO 8601 UTC（購入日未入力時の並び代用にも使う）
@@ -163,6 +163,13 @@ export interface BottleRecord<C extends SakeCategory = SakeCategory> {
   // 編集保護メタデータ（ステップ2のGemini再取り込み時に上書きしないフィールド名一覧）
   userEditedFields: string[];
 }
+
+/**
+ * ボトル1本レコード（1本＝1レコード、最初から同期前提）
+ * category と categoryAttributes を型レベルで結びつける Discriminated Union
+ */
+export type BottleRecord<C extends SakeCategory = SakeCategory> =
+  C extends SakeCategory ? BottleRecordBase<C> : never;
 
 /** 写真レコード（端末内 IndexedDB 保持・ステップ4で Drive 連携） */
 export interface PhotoRecord {

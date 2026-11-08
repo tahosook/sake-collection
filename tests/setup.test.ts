@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { SAMPLE_BOTTLES, SAMPLE_PHOTOS } from '../src/data/sampleData';
-import { SAKE_CATEGORIES, BOTTLE_STATUSES } from '../src/types/sake';
-import { CATEGORY_ORDER, isSakeCategory } from '../src/domain/categories';
+import { SAKE_CATEGORIES, BOTTLE_STATUSES, BottleRecord } from '../src/types/sake';
+import { CATEGORY_ORDER, isSakeCategory, CATEGORY_ATTRIBUTE_LABELS } from '../src/domain/categories';
 
 describe('PR #1 検証環境セットアップテスト', () => {
   it('固定10種類が定義されており判定ガードが正しく動作すること', () => {
@@ -35,19 +35,47 @@ describe('PR #1 検証環境セットアップテスト', () => {
       expect(bottle.purchaseInfo).toHaveProperty('purchasePriceYen');
       if (bottle.referencePrice !== null) {
         expect(bottle.referencePrice).toHaveProperty('estimatedPriceYen');
-        // purchasePriceYen と estimatedPriceYen は別プロパティである
+        // purchasePriceYen と estimatedPriceYen は別オブジェクト・別プロパティである
         expect(Object.is(bottle.purchaseInfo, bottle.referencePrice)).toBe(false);
       }
     }
   });
 
-  it('サンプル写真の全枚数が紐付け可能であること', () => {
+  it('サンプル写真の全枚数が紐付け可能で双方向参照整合性を満たすこと', () => {
     expect(SAMPLE_PHOTOS.length).toBeGreaterThan(0);
-    const photoIds = new Set(SAMPLE_PHOTOS.map((p) => p.id));
+    const photoMap = new Map(SAMPLE_PHOTOS.map((p) => [p.id, p]));
+    const bottleMap = new Map(SAMPLE_BOTTLES.map((b) => [b.id, b]));
+
+    // 写真側から親ボトルへの検証
+    for (const photo of SAMPLE_PHOTOS) {
+      expect(photo.dataUrl.startsWith(`data:${photo.mimeType};base64,`)).toBe(true);
+      const parentBottle = bottleMap.get(photo.bottleId);
+      expect(parentBottle).toBeDefined();
+      expect(parentBottle?.photoIds).toContain(photo.id);
+    }
+
+    // ボトル側から写真への検証
     for (const bottle of SAMPLE_BOTTLES) {
       for (const id of bottle.photoIds) {
-        expect(photoIds.has(id)).toBe(true);
+        expect(photoMap.has(id)).toBe(true);
+      }
+      if (bottle.primaryPhotoId !== null) {
+        expect(bottle.photoIds).toContain(bottle.primaryPhotoId);
       }
     }
+  });
+
+  it('BottleRecord が種類別属性と正しく連動すること', () => {
+    for (const bottle of SAMPLE_BOTTLES) {
+      const allowedAttrs = CATEGORY_ATTRIBUTE_LABELS[bottle.category];
+      for (const key of Object.keys(bottle.categoryAttributes)) {
+        expect(key in allowedAttrs).toBe(true);
+      }
+    }
+
+    // Discriminated Union 型の動作確認
+    const nihonshu: BottleRecord<'日本酒'> = SAMPLE_BOTTLES[0] as BottleRecord<'日本酒'>;
+    expect(nihonshu.category).toBe('日本酒');
+    expect(nihonshu.categoryAttributes.brewery).toBe('鳳凰酒造');
   });
 });

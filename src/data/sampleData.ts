@@ -1,17 +1,15 @@
 import { BottleRecord, PhotoRecord } from '../types/sake';
 
 /**
- * サンプル確認用のダミー画像（インライン SVG Data URL）
+ * サンプル確認用のダミー画像（インライン JPEG Base64 Data URL）
  * 実写真ファイルをリポジトリに入れないルールの遵守
+ * 最小限の有効な JPEG バイナリを Base64 化して提供
  */
-function createDummyPhotoDataUrl(label: string, bg: string, text: string): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="500" viewBox="0 0 400 500">
-    <rect width="400" height="500" fill="${bg}" rx="16"/>
-    <rect x="30" y="40" width="340" height="420" fill="none" stroke="${text}" stroke-width="2" rx="8" opacity="0.4"/>
-    <text x="200" y="240" font-family="sans-serif" font-size="24" font-weight="bold" fill="${text}" text-anchor="middle">${label}</text>
-    <text x="200" y="280" font-family="sans-serif" font-size="14" fill="${text}" opacity="0.8" text-anchor="middle">sake-collection sample</text>
-  </svg>`;
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+const MINIMAL_JPEG_BASE64 =
+  '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=';
+
+function createDummyPhotoDataUrl(): string {
+  return `data:image/jpeg;base64,${MINIMAL_JPEG_BASE64}`;
 }
 
 export const SAMPLE_PHOTOS: PhotoRecord[] = [
@@ -19,7 +17,7 @@ export const SAMPLE_PHOTOS: PhotoRecord[] = [
     id: '11111111-0001-4000-8000-000000000001',
     bottleId: '00000000-0001-4000-8000-000000000001',
     mimeType: 'image/jpeg',
-    dataUrl: createDummyPhotoDataUrl('純米大吟醸 鳳凰', '#1e293b', '#f8fafc'),
+    dataUrl: createDummyPhotoDataUrl(),
     width: 400,
     height: 500,
     byteSize: 1024,
@@ -33,7 +31,7 @@ export const SAMPLE_PHOTOS: PhotoRecord[] = [
     id: '11111111-0001-4000-8000-000000000002',
     bottleId: '00000000-0001-4000-8000-000000000001',
     mimeType: 'image/jpeg',
-    dataUrl: createDummyPhotoDataUrl('鳳凰 裏ラベル', '#334155', '#f8fafc'),
+    dataUrl: createDummyPhotoDataUrl(),
     width: 400,
     height: 500,
     byteSize: 1024,
@@ -47,7 +45,7 @@ export const SAMPLE_PHOTOS: PhotoRecord[] = [
     id: '11111111-0002-4000-8000-000000000001',
     bottleId: '00000000-0001-4000-8000-000000000002',
     mimeType: 'image/jpeg',
-    dataUrl: createDummyPhotoDataUrl('純米大吟醸 鳳凰 (2本目)', '#1e293b', '#f8fafc'),
+    dataUrl: createDummyPhotoDataUrl(),
     width: 400,
     height: 500,
     byteSize: 1024,
@@ -61,7 +59,7 @@ export const SAMPLE_PHOTOS: PhotoRecord[] = [
     id: '11111111-0003-4000-8000-000000000001',
     bottleId: '00000000-0002-4000-8000-000000000001',
     mimeType: 'image/jpeg',
-    dataUrl: createDummyPhotoDataUrl('Chateau Margaux 2018', '#881337', '#ffe4e6'),
+    dataUrl: createDummyPhotoDataUrl(),
     width: 400,
     height: 500,
     byteSize: 1024,

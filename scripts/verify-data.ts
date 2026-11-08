@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SAMPLE_BOTTLES, SAMPLE_PHOTOS } from '../src/data/sampleData';
-import { SAKE_CATEGORIES, BOTTLE_STATUSES } from '../src/types/sake';
+import { SAKE_CATEGORIES, BOTTLE_STATUSES, BottleRecord } from '../src/types/sake';
+import { CATEGORY_ATTRIBUTE_LABELS } from '../src/domain/categories';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -10,7 +11,7 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/;
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
-function assert(condition: boolean, message: string): void {
+function assert(condition: boolean, message: string): asserts condition {
   if (!condition) {
     throw new Error(`[verify:data] 検証エラー: ${message}`);
   }
@@ -24,21 +25,7 @@ function verifySampleData(): void {
   assert(Array.isArray(SAMPLE_BOTTLES) && SAMPLE_BOTTLES.length > 0, 'SAMPLE_BOTTLES が空です');
   assert(Array.isArray(SAMPLE_PHOTOS) && SAMPLE_PHOTOS.length > 0, 'SAMPLE_PHOTOS が空です');
 
-  const photoIdSet = new Set<string>();
-  for (const photo of SAMPLE_PHOTOS) {
-    assert(UUID_REGEX.test(photo.id), `Photo ID が UUID 形式ではありません: ${photo.id}`);
-    assert(UUID_REGEX.test(photo.bottleId), `Photo bottleId が UUID 形式ではありません: ${photo.bottleId}`);
-    assert(['image/jpeg', 'image/webp'].includes(photo.mimeType), `不正な写真 mimeType: ${photo.mimeType}`);
-    assert(typeof photo.dataUrl === 'string' && photo.dataUrl.length > 0, `Photo dataUrl が不正です: ${photo.id}`);
-    assert(photo.dataUrl.startsWith('data:'), `Photo dataUrl は data: 形式である必要があります: ${photo.id}`);
-    assert(ISO_DATE_REGEX.test(photo.createdAt), `Photo createdAt が ISO 8601 UTC 形式ではありません: ${photo.createdAt}`);
-    assert(ISO_DATE_REGEX.test(photo.updatedAt), `Photo updatedAt が ISO 8601 UTC 形式ではありません: ${photo.updatedAt}`);
-    assert(typeof photo.deleted === 'boolean', `Photo deleted が boolean ではありません: ${photo.id}`);
-    assert(typeof photo.contentHash === 'string' && photo.contentHash.length > 0, `Photo contentHash が不正です: ${photo.id}`);
-    photoIdSet.add(photo.id);
-  }
-
-  const bottleIdSet = new Set<string>();
+  const bottleMap = new Map<string, BottleRecord>();
   const statusCounts: Record<string, number> = {
     unopened: 0,
     opened: 0,
@@ -49,8 +36,8 @@ function verifySampleData(): void {
 
   for (const bottle of SAMPLE_BOTTLES) {
     assert(UUID_REGEX.test(bottle.id), `Bottle ID が UUID 形式ではありません: ${bottle.id}`);
-    assert(!bottleIdSet.has(bottle.id), `Bottle ID が重複しています: ${bottle.id}`);
-    bottleIdSet.add(bottle.id);
+    assert(!bottleMap.has(bottle.id), `Bottle ID が重複しています: ${bottle.id}`);
+    bottleMap.set(bottle.id, bottle);
 
     assert(typeof bottle.name === 'string' && bottle.name.trim().length > 0, `名前が空です: ${bottle.id}`);
     assert(SAKE_CATEGORIES.includes(bottle.category), `未知の種類: ${bottle.category} (id: ${bottle.id})`);
@@ -63,11 +50,26 @@ function verifySampleData(): void {
     assert(ISO_DATE_REGEX.test(bottle.updatedAt), `updatedAt が ISO 8601 UTC 形式ではありません: ${bottle.updatedAt}`);
     assert(typeof bottle.deleted === 'boolean', `deleted が boolean ではありません: ${bottle.id}`);
 
-    // 未開封時の日付制約
+    // 状態ごとの日付制約検証
     if (bottle.status === 'unopened') {
       assert(
         bottle.openedDate === null && bottle.finishedDate === null && bottle.disposedDate === null,
         `未開封ボトルの日付はすべて null である必要があります: ${bottle.id}`
+      );
+    } else if (bottle.status === 'opened') {
+      assert(
+        bottle.finishedDate === null && bottle.disposedDate === null,
+        `開封済みボトルの飲み切り日・手放した日は null である必要があります: ${bottle.id}`
+      );
+    } else if (bottle.status === 'finished') {
+      assert(
+        bottle.disposedDate === null,
+        `飲み切りボトルの手放した日は null である必要があります: ${bottle.id}`
+      );
+    } else if (bottle.status === 'disposed') {
+      assert(
+        bottle.finishedDate === null,
+        `手放したボトルの飲み切り日は null である必要があります: ${bottle.id}`
       );
     }
 
@@ -79,6 +81,36 @@ function verifySampleData(): void {
     }
     if (bottle.disposedDate !== null) {
       assert(DATE_REGEX.test(bottle.disposedDate), `disposedDate が YYYY-MM-DD 形式ではありません: ${bottle.disposedDate}`);
+    }
+
+    // 種類別追加属性のキー検査（許可された属性キーのみが存在するか）
+    const allowedAttrs = CATEGORY_ATTRIBUTE_LABELS[bottle.category];
+    const actualAttrKeys = Object.keys(bottle.categoryAttributes);
+    for (const key of actualAttrKeys) {
+      assert(
+        key in allowedAttrs,
+        `種類 '${bottle.category}' に許可されていない属性キー '${key}' が含まれています (bottle: ${bottle.id})`
+      );
+    }
+
+    // 感想メモ・また買いたい印・編集保護メタデータ
+    assert(typeof bottle.tastingNote === 'string', `tastingNote は文字列である必要があります: ${bottle.id}`);
+    assert(typeof bottle.wantToBuyAgain === 'boolean', `wantToBuyAgain は真偽値である必要があります: ${bottle.id}`);
+    assert(Array.isArray(bottle.userEditedFields), `userEditedFields は配列である必要があります: ${bottle.id}`);
+
+    // 解説・出典
+    if (bottle.description !== null) {
+      assert(
+        typeof bottle.description.summary === 'string' &&
+        typeof bottle.description.tasteProfile === 'string' &&
+        typeof bottle.description.background === 'string' &&
+        typeof bottle.description.servingSuggestion === 'string',
+        `解説の4部構成フィールドが不正です: ${bottle.id}`
+      );
+    }
+    assert(Array.isArray(bottle.sources), `sources は配列である必要があります: ${bottle.id}`);
+    for (const source of bottle.sources) {
+      assert(typeof source.url === 'string' && source.url.startsWith('http'), `出典URLが不正です: ${bottle.id}`);
     }
 
     // 購入情報と相場目安の完全分離検証
@@ -101,17 +133,6 @@ function verifySampleData(): void {
         );
       }
     }
-
-    // 写真IDの紐付け整合性
-    for (const photoId of bottle.photoIds) {
-      assert(photoIdSet.has(photoId), `Bottle ${bottle.id} の photoId ${photoId} が SAMPLE_PHOTOS に存在しません`);
-    }
-    if (bottle.primaryPhotoId !== null) {
-      assert(
-        bottle.photoIds.includes(bottle.primaryPhotoId),
-        `primaryPhotoId ${bottle.primaryPhotoId} は photoIds に含まれる必要があります (bottle: ${bottle.id})`
-      );
-    }
   }
 
   // 全4状態の存在確認
@@ -124,7 +145,52 @@ function verifySampleData(): void {
     assert((categoryCounts[cat] ?? 0) > 0, `サンプルデータに種類 '${cat}' のボトルが存在しません`);
   }
 
-  console.log(`✓ サンプルデータ検証完了: ボトル ${SAMPLE_BOTTLES.length}件、写真 ${SAMPLE_PHOTOS.length}件`);
+  // 写真データの検証および双方向参照整合性検証
+  const photoIdSet = new Set<string>();
+  for (const photo of SAMPLE_PHOTOS) {
+    assert(UUID_REGEX.test(photo.id), `Photo ID が UUID 形式ではありません: ${photo.id}`);
+    assert(!photoIdSet.has(photo.id), `Photo ID が重複しています: ${photo.id}`);
+    photoIdSet.add(photo.id);
+
+    assert(UUID_REGEX.test(photo.bottleId), `Photo bottleId が UUID 形式ではありません: ${photo.bottleId}`);
+    assert(['image/jpeg', 'image/webp'].includes(photo.mimeType), `不正な写真 mimeType: ${photo.mimeType}`);
+    assert(typeof photo.dataUrl === 'string' && photo.dataUrl.length > 0, `Photo dataUrl が不正です: ${photo.id}`);
+
+    // mimeType と dataUrl プレフィックスの整合性
+    const expectedPrefix = `data:${photo.mimeType};base64,`;
+    assert(
+      photo.dataUrl.startsWith(expectedPrefix),
+      `Photo dataUrl は '${expectedPrefix}' で始まる必要があります: ${photo.id}`
+    );
+
+    assert(ISO_DATE_REGEX.test(photo.createdAt), `Photo createdAt が ISO 8601 UTC 形式ではありません: ${photo.createdAt}`);
+    assert(ISO_DATE_REGEX.test(photo.updatedAt), `Photo updatedAt が ISO 8601 UTC 形式ではありません: ${photo.updatedAt}`);
+    assert(typeof photo.deleted === 'boolean', `Photo deleted が boolean ではありません: ${photo.id}`);
+    assert(typeof photo.contentHash === 'string' && photo.contentHash.length > 0, `Photo contentHash が不正です: ${photo.id}`);
+
+    // 双方向参照整合性：photo.bottleId のボトルが存在し、そのボトルの photoIds に photo.id が含まれていること
+    const parentBottle = bottleMap.get(photo.bottleId);
+    assert(parentBottle !== undefined, `Photo ${photo.id} の親ボトル ${photo.bottleId} が存在しません`);
+    assert(
+      parentBottle.photoIds.includes(photo.id),
+      `Photo ${photo.id} の親ボトル ${photo.bottleId} の photoIds にこの写真IDが含まれていません`
+    );
+  }
+
+  // ボトル側から写真への参照整合性
+  for (const bottle of SAMPLE_BOTTLES) {
+    for (const photoId of bottle.photoIds) {
+      assert(photoIdSet.has(photoId), `Bottle ${bottle.id} の photoId ${photoId} が SAMPLE_PHOTOS に存在しません`);
+    }
+    if (bottle.primaryPhotoId !== null) {
+      assert(
+        bottle.photoIds.includes(bottle.primaryPhotoId),
+        `primaryPhotoId ${bottle.primaryPhotoId} は photoIds に含まれる必要があります (bottle: ${bottle.id})`
+      );
+    }
+  }
+
+  console.log(`✓ サンプルデータ検証完了: ボトル ${SAMPLE_BOTTLES.length}件、写真 ${SAMPLE_PHOTOS.length}件 (双方向参照整合性確認済)`);
 }
 
 /**
@@ -133,6 +199,12 @@ function verifySampleData(): void {
 function verifyNoForbiddenComments(): void {
   console.log('--- 2. 禁止コメント検査 ---');
   const targetDirs = ['src', 'scripts', 'tests'];
+  const targetFiles = [
+    'eslint.config.js',
+    'vite.config.ts',
+    'tailwind.config.js',
+    'postcss.config.js',
+  ];
   const patterns = [
     { name: '@' + 'ts' + '-ignore', regex: new RegExp('@' + 'ts' + '-ignore') },
     { name: '@' + 'ts' + '-expect-error', regex: new RegExp('@' + 'ts' + '-expect-error') },
@@ -141,7 +213,24 @@ function verifyNoForbiddenComments(): void {
   ];
 
   const currentScriptPath = path.resolve(__filename);
+  const projectRoot = process.cwd();
   const foundErrors: string[] = [];
+
+  function checkFile(fullPath: string): void {
+    if (path.resolve(fullPath) === currentScriptPath) {
+      return;
+    }
+    if (!fs.existsSync(fullPath)) return;
+    const content = fs.readFileSync(fullPath, 'utf8');
+    const lines = content.split('\n');
+    lines.forEach((line, index) => {
+      for (const pattern of patterns) {
+        if (pattern.regex.test(line)) {
+          foundErrors.push(`${fullPath}:${index + 1} に禁止記述 '${pattern.name}' が含まれています: ${line.trim()}`);
+        }
+      }
+    });
+  }
 
   function scanDir(dirPath: string): void {
     if (!fs.existsSync(dirPath)) return;
@@ -151,24 +240,16 @@ function verifyNoForbiddenComments(): void {
       if (entry.isDirectory()) {
         scanDir(fullPath);
       } else if (entry.isFile() && /\.(ts|tsx|js|jsx)$/.test(entry.name)) {
-        if (path.resolve(fullPath) === currentScriptPath) {
-          continue;
-        }
-        const content = fs.readFileSync(fullPath, 'utf8');
-        const lines = content.split('\n');
-        lines.forEach((line, index) => {
-          for (const pattern of patterns) {
-            if (pattern.regex.test(line)) {
-              foundErrors.push(`${fullPath}:${index + 1} に禁止記述 '${pattern.name}' が含まれています: ${line.trim()}`);
-            }
-          }
-        });
+        checkFile(fullPath);
       }
     }
   }
 
   for (const dir of targetDirs) {
-    scanDir(path.resolve(process.cwd(), dir));
+    scanDir(path.resolve(projectRoot, dir));
+  }
+  for (const file of targetFiles) {
+    checkFile(path.resolve(projectRoot, file));
   }
 
   if (foundErrors.length > 0) {
@@ -181,31 +262,52 @@ function verifyNoForbiddenComments(): void {
 }
 
 /**
- * 3. 実写真ファイル・実データ混入防止検査
+ * 3. 許可外JSON・画像ファイル混入防止検査（AGENTS.md §2 準拠）
  */
 function verifyNoRealPhotosOrData(): void {
-  console.log('--- 3. 実写真・実データ混入防止検査 ---');
+  console.log('--- 3. 許可外JSON・画像ファイル混入防止検査 ---');
   const projectRoot = process.cwd();
-  const photoExtensions = ['.jpg', '.jpeg', '.png', '.webp', '.heic', '.bmp', '.gif'];
-  const ignoredDirs = new Set(['.git', 'node_modules', 'dist', '.gemini']);
+
+  // 禁止する画像拡張子
+  const photoExtensions = [
+    '.jpg', '.jpeg', '.png', '.webp', '.heic',
+    '.bmp', '.gif', '.svg', '.avif', '.ico', '.tiff',
+  ];
+
+  // リポジトリ内で許可された JSON ファイルの相対パス一覧（ホワイトリスト方式）
+  const allowedJsonFiles = new Set([
+    'package.json',
+    'package-lock.json',
+    'tsconfig.json',
+  ]);
+
+  // スキャン除外ディレクトリ
+  const ignoredDirs = new Set(['.git', 'node_modules', '.gemini']);
 
   const foundPhotoFiles: string[] = [];
-  const foundDataFiles: string[] = [];
+  const foundDisallowedJsonFiles: string[] = [];
 
   function scan(currentDir: string): void {
     const entries = fs.readdirSync(currentDir, { withFileTypes: true });
     for (const entry of entries) {
+      const fullPath = path.join(currentDir, entry.name);
+      const relativePath = path.relative(projectRoot, fullPath);
+
       if (entry.isDirectory()) {
         if (!ignoredDirs.has(entry.name)) {
-          scan(path.join(currentDir, entry.name));
+          scan(fullPath);
         }
       } else if (entry.isFile()) {
         const ext = path.extname(entry.name).toLowerCase();
+        // 画像ファイルの検出
         if (photoExtensions.includes(ext)) {
-          foundPhotoFiles.push(path.relative(projectRoot, path.join(currentDir, entry.name)));
+          foundPhotoFiles.push(relativePath);
         }
-        if (entry.name.endsWith('.local.json')) {
-          foundDataFiles.push(path.relative(projectRoot, path.join(currentDir, entry.name)));
+        // JSON ファイルのホワイトリスト検査
+        if (ext === '.json') {
+          if (!allowedJsonFiles.has(relativePath)) {
+            foundDisallowedJsonFiles.push(relativePath);
+          }
         }
       }
     }
@@ -214,18 +316,18 @@ function verifyNoRealPhotosOrData(): void {
   scan(projectRoot);
 
   if (foundPhotoFiles.length > 0) {
-    console.error('実写真ファイルが検出されました（リポジトリへのコミットは禁止です）:');
+    console.error('画像ファイルが検出されました（リポジトリ内への画像ファイル配置は禁止です）:');
     foundPhotoFiles.forEach((file) => console.error(`  - ${file}`));
-    throw new Error('[verify:data] 実写真ファイルがリポジトリ内に存在します');
+    throw new Error('[verify:data] 画像ファイルがリポジトリ内に存在します');
   }
 
-  if (foundDataFiles.length > 0) {
-    console.error('ローカル実データファイルが検出されました（コミット禁止）:');
-    foundDataFiles.forEach((file) => console.error(`  - ${file}`));
-    throw new Error('[verify:data] ローカル実データファイルがリポジトリ内に存在します');
+  if (foundDisallowedJsonFiles.length > 0) {
+    console.error('許可外の JSON ファイルが検出されました（実データや余計な JSON のコミットは禁止です）:');
+    foundDisallowedJsonFiles.forEach((file) => console.error(`  - ${file}`));
+    throw new Error('[verify:data] 許可外の JSON ファイルがリポジトリ内に存在します');
   }
 
-  console.log('✓ 実写真・実データ混入防止検査完了: 混入ファイルなし');
+  console.log('✓ 許可外JSON・画像ファイル混入防止検査完了: 混入ファイルなし (ホワイトリスト準拠)');
 }
 
 function main(): void {
