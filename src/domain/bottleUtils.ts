@@ -1,4 +1,5 @@
 import { BottleRecord, BottleRecordBase, BottleStatus, SakeCategory, CategoryAttributesMap, PurchaseInfo } from '../types/sake';
+import { isValidCalendarDate } from './validation';
 
 /**
  * 現在の日付文字列を YYYY-MM-DD 形式で取得する (ローカル暦日基準)
@@ -30,9 +31,8 @@ export function calculateOpenedDays(
     return null;
   }
 
-  // YYYY-MM-DD の形式チェック
-  const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-  if (!dateRegex.test(bottle.openedDate) || !dateRegex.test(targetDate)) {
+  // 実在する日付かチェック
+  if (!isValidCalendarDate(bottle.openedDate) || !isValidCalendarDate(targetDate)) {
     return null;
   }
 

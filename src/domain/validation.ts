@@ -7,6 +7,34 @@ const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/;
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const HASH_HEX_REGEX = /^[0-9a-f]{64}$/i;
 
+/**
+ * YYYY-MM-DD 形式の日付文字列が暦日として実在するか判定する
+ * うるう年や各月の日数（2月29日/30日、4月31日等）の不正を検出
+ */
+export function isValidCalendarDate(dateStr: string): boolean {
+  if (!DATE_REGEX.test(dateStr)) {
+    return false;
+  }
+  const [yearStr, monthStr, dayStr] = dateStr.split('-');
+  if (!yearStr || !monthStr || !dayStr) {
+    return false;
+  }
+  const y = Number(yearStr);
+  const m = Number(monthStr);
+  const d = Number(dayStr);
+
+  if (m < 1 || m > 12 || d < 1 || d > 31 || y < 1900 || y > 2100) {
+    return false;
+  }
+
+  const date = new Date(Date.UTC(y, m - 1, d));
+  return (
+    date.getUTCFullYear() === y &&
+    date.getUTCMonth() === m - 1 &&
+    date.getUTCDate() === d
+  );
+}
+
 export type ValidationResult<T> =
   | { success: true; data: T }
   | { success: false; error: string };
@@ -67,14 +95,14 @@ export function validateBottleRecord(raw: unknown, indexHint?: number | string):
   const finishedDate = b['finishedDate'];
   const disposedDate = b['disposedDate'];
 
-  if (openedDate !== null && (typeof openedDate !== 'string' || !DATE_REGEX.test(openedDate))) {
-    return { success: false, error: `${prefix}openedDate は YYYY-MM-DD または null である必要があります。` };
+  if (openedDate !== null && (typeof openedDate !== 'string' || !isValidCalendarDate(openedDate))) {
+    return { success: false, error: `${prefix}openedDate は実在する有効な日付 (YYYY-MM-DD) または null である必要があります: ${String(openedDate)}` };
   }
-  if (finishedDate !== null && (typeof finishedDate !== 'string' || !DATE_REGEX.test(finishedDate))) {
-    return { success: false, error: `${prefix}finishedDate は YYYY-MM-DD または null である必要があります。` };
+  if (finishedDate !== null && (typeof finishedDate !== 'string' || !isValidCalendarDate(finishedDate))) {
+    return { success: false, error: `${prefix}finishedDate は実在する有効な日付 (YYYY-MM-DD) または null である必要があります: ${String(finishedDate)}` };
   }
-  if (disposedDate !== null && (typeof disposedDate !== 'string' || !DATE_REGEX.test(disposedDate))) {
-    return { success: false, error: `${prefix}disposedDate は YYYY-MM-DD または null である必要があります。` };
+  if (disposedDate !== null && (typeof disposedDate !== 'string' || !isValidCalendarDate(disposedDate))) {
+    return { success: false, error: `${prefix}disposedDate は実在する有効な日付 (YYYY-MM-DD) または null である必要があります: ${String(disposedDate)}` };
   }
 
   if (status === 'unopened') {
@@ -123,8 +151,8 @@ export function validateBottleRecord(raw: unknown, indexHint?: number | string):
     return { success: false, error: `${prefix}purchaseInfo がオブジェクトではありません。` };
   }
   const pInfo = b['purchaseInfo'] as Record<string, unknown>;
-  if (pInfo['purchaseDate'] !== null && (typeof pInfo['purchaseDate'] !== 'string' || !DATE_REGEX.test(pInfo['purchaseDate']))) {
-    return { success: false, error: `${prefix}購入日 (purchaseDate) は YYYY-MM-DD または null である必要があります。` };
+  if (pInfo['purchaseDate'] !== null && (typeof pInfo['purchaseDate'] !== 'string' || !isValidCalendarDate(pInfo['purchaseDate']))) {
+    return { success: false, error: `${prefix}購入日 (purchaseDate) は実在する有効な日付 (YYYY-MM-DD) または null である必要があります: ${String(pInfo['purchaseDate'])}` };
   }
   if (typeof pInfo['purchasePlace'] !== 'string') {
     return { success: false, error: `${prefix}購入場所 (purchasePlace) は文字列である必要があります。` };
@@ -142,8 +170,8 @@ export function validateBottleRecord(raw: unknown, indexHint?: number | string):
     if (rPrice['estimatedPriceYen'] !== null && (typeof rPrice['estimatedPriceYen'] !== 'number' || rPrice['estimatedPriceYen'] < 0)) {
       return { success: false, error: `${prefix}相場目安推定値 (estimatedPriceYen) は正の数値または null である必要があります。` };
     }
-    if (rPrice['fetchedDate'] !== null && (typeof rPrice['fetchedDate'] !== 'string' || !DATE_REGEX.test(rPrice['fetchedDate']))) {
-      return { success: false, error: `${prefix}相場目安取得日 (fetchedDate) は YYYY-MM-DD または null である必要があります。` };
+    if (rPrice['fetchedDate'] !== null && (typeof rPrice['fetchedDate'] !== 'string' || !isValidCalendarDate(rPrice['fetchedDate']))) {
+      return { success: false, error: `${prefix}相場目安取得日 (fetchedDate) は実在する有効な日付 (YYYY-MM-DD) または null である必要があります: ${String(rPrice['fetchedDate'])}` };
     }
   }
 
@@ -280,19 +308,19 @@ export function validateBackupData(input: unknown): ValidationResult<BackupData>
 
   // 写真全件検証
   const validatedPhotos: PhotoRecord[] = [];
-  const photoIdSet = new Set<string>();
+  const photoMap = new Map<string, PhotoRecord>();
 
   for (let i = 0; i < root['photos'].length; i++) {
     const pRes = validatePhotoRecord(root['photos'][i], i + 1);
     if (!pRes.success) {
       return pRes;
     }
-    if (photoIdSet.has(pRes.data.id)) {
+    if (photoMap.has(pRes.data.id)) {
       return { success: false, error: `重複する写真 ID が見つかりました: ${pRes.data.id}` };
     }
-    photoIdSet.add(pRes.data.id);
+    photoMap.set(pRes.data.id, pRes.data);
 
-    // 写真の親ボトル参照整合性
+    // 写真の親ボトル参照整合性 (写真 -> ボトル)
     const parentBottle = bottleIdMap.get(pRes.data.bottleId);
     if (!parentBottle) {
       return {
@@ -310,13 +338,20 @@ export function validateBackupData(input: unknown): ValidationResult<BackupData>
     validatedPhotos.push(pRes.data);
   }
 
-  // ボトル側から写真への参照整合性
+  // ボトル側から写真への参照整合性 (ボトル -> 写真)
   for (const bottle of validatedBottles) {
     for (const pid of bottle.photoIds) {
-      if (!photoIdSet.has(pid)) {
+      const photo = photoMap.get(pid);
+      if (!photo) {
         return {
           success: false,
           error: `ボトル ${bottle.id} の photoId ${pid} に対応する写真レコードが存在しません。`,
+        };
+      }
+      if (photo.bottleId !== bottle.id) {
+        return {
+          success: false,
+          error: `ボトル ${bottle.id} の photoIds に含まれる写真 ${pid} の持ち主（bottleId: ${photo.bottleId}）が一致しません。`,
         };
       }
     }

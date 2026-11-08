@@ -52,15 +52,19 @@ describe('bottleUtils ドメインロジックテスト', () => {
       expect(calculateOpenedDays(disposed)).toBeNull();
     });
 
-    it('未来の日付が入っている場合は 0 を返すこと', () => {
+    it('不正な日付や実在しない日付のときは null を返すこと', () => {
       const bottle = createNewBottle({
-        name: '未来開封日ボトル',
+        name: '実在しない日付ボトル',
         category: '日本酒',
         status: 'opened',
-        openedDate: '2026-12-01',
+        openedDate: '2026-02-30', // 実在しない
       });
 
-      expect(calculateOpenedDays(bottle, '2026-11-08')).toBe(0);
+      expect(calculateOpenedDays(bottle, '2026-11-08')).toBeNull();
+
+      const validBottle = SAMPLE_BOTTLES.find((b) => b.status === 'opened' && b.openedDate !== null)!;
+      expect(calculateOpenedDays(validBottle, 'invalid-target-date')).toBeNull();
+      expect(calculateOpenedDays(validBottle, '2026-13-01')).toBeNull();
     });
   });
 

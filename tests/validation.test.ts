@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  isValidCalendarDate,
   validateBackupData,
   validateBottleRecord,
   validateImportBottleJson,
@@ -15,6 +16,29 @@ describe('validation ドメインロジックテスト', () => {
     bottles: SAMPLE_BOTTLES,
     photos: SAMPLE_PHOTOS,
   };
+
+  describe('isValidCalendarDate', () => {
+    it('実在する日付に対して true を返すこと', () => {
+      expect(isValidCalendarDate('2026-02-28')).toBe(true);
+      expect(isValidCalendarDate('2026-10-25')).toBe(true);
+      expect(isValidCalendarDate('2024-02-29')).toBe(true); // うるう年
+    });
+
+    it('実在しない日付（うるう年以外の2月29日、2月30日、小の月の31日、月や日の範囲外）を拒否すること', () => {
+      expect(isValidCalendarDate('2026-02-29')).toBe(false); // 2026年はうるう年ではない
+      expect(isValidCalendarDate('2026-02-30')).toBe(false);
+      expect(isValidCalendarDate('2026-04-31')).toBe(false); // 4月は30日まで
+      expect(isValidCalendarDate('2026-06-31')).toBe(false); // 6月は30日まで
+      expect(isValidCalendarDate('2026-09-31')).toBe(false); // 9月は30日まで
+      expect(isValidCalendarDate('2026-11-31')).toBe(false); // 11月は30日まで
+      expect(isValidCalendarDate('2026-13-01')).toBe(false); // 13月
+      expect(isValidCalendarDate('2026-00-10')).toBe(false); // 0月
+      expect(isValidCalendarDate('2026-05-00')).toBe(false); // 0日
+      expect(isValidCalendarDate('2026-05-32')).toBe(false); // 32日
+      expect(isValidCalendarDate('invalid-date')).toBe(false);
+      expect(isValidCalendarDate('2026/05/10')).toBe(false);
+    });
+  });
 
   describe('validateBackupData', () => {
     it('正常なバックアップデータオブジェクトの検証が成功すること', () => {
@@ -107,6 +131,21 @@ describe('validation ドメインロジックテスト', () => {
       }
     });
 
+    it('ボトルの photoIds に別ボトルに紐づく写真が含まれている場合は拒否されること（双方向照合）', () => {
+      const corruptedBottles = JSON.parse(JSON.stringify(SAMPLE_BOTTLES)) as BottleRecord[];
+      // 写真3 (00000000-0001-4000-8000-000000000002 に紐づく) を ボトル1 (00000000-0001-4000-8000-000000000001) の photoIds に追加
+      const photo3Id = SAMPLE_PHOTOS[2]!.id;
+      corruptedBottles[0]!.photoIds.push(photo3Id);
+
+      const invalid = { ...validBackup, bottles: corruptedBottles };
+      const result = validateBackupData(invalid);
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('持ち主（bottleId:');
+      }
+    });
+
     it('ボトルの photoId に対応する写真レコードが存在しない場合は拒否されること', () => {
       const corruptedBottles = JSON.parse(JSON.stringify(SAMPLE_BOTTLES)) as BottleRecord[];
       corruptedBottles[0]!.photoIds.push('11111111-9999-4000-8000-000000000000');
@@ -117,6 +156,59 @@ describe('validation ドメインロジックテスト', () => {
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error).toContain('対応する写真レコードが存在しません');
+      }
+    });
+
+    it('実在しない日付（2026-02-30 や 2026-13-01）が含まれる場合は拒否されること', () => {
+      // 1. 開封日に 2026-02-30 (実在しない)
+      const c1 = JSON.parse(JSON.stringify(SAMPLE_BOTTLES)) as BottleRecord[];
+      const openedBottle = c1.find((b) => b.status === 'opened')!;
+      openedBottle.openedDate = '2026-02-30';
+      const res1 = validateBackupData({ ...validBackup, bottles: c1 });
+      expect(res1.success).toBe(false);
+      if (!res1.success) {
+        expect(res1.error).toContain('openedDate は実在する有効な日付');
+      }
+
+      // 2. 飲み切り日に 2026-13-01 (13月)
+      const c2 = JSON.parse(JSON.stringify(SAMPLE_BOTTLES)) as BottleRecord[];
+      const finishedBottle = c2.find((b) => b.status === 'finished')!;
+      finishedBottle.finishedDate = '2026-13-01';
+      const res2 = validateBackupData({ ...validBackup, bottles: c2 });
+      expect(res2.success).toBe(false);
+      if (!res2.success) {
+        expect(res2.error).toContain('finishedDate は実在する有効な日付');
+      }
+
+      // 3. 手放した日に 2026-04-31 (4月31日)
+      const c3 = JSON.parse(JSON.stringify(SAMPLE_BOTTLES)) as BottleRecord[];
+      const disposedBottle = c3.find((b) => b.status === 'disposed')!;
+      disposedBottle.disposedDate = '2026-04-31';
+      const res3 = validateBackupData({ ...validBackup, bottles: c3 });
+      expect(res3.success).toBe(false);
+      if (!res3.success) {
+        expect(res3.error).toContain('disposedDate は実在する有効な日付');
+      }
+
+      // 4. 購入日に 2026-02-29 (平年の2月29日)
+      const c4 = JSON.parse(JSON.stringify(SAMPLE_BOTTLES)) as BottleRecord[];
+      c4[0]!.purchaseInfo.purchaseDate = '2026-02-29';
+      const res4 = validateBackupData({ ...validBackup, bottles: c4 });
+      expect(res4.success).toBe(false);
+      if (!res4.success) {
+        expect(res4.error).toContain('購入日 (purchaseDate) は実在する有効な日付');
+      }
+
+      // 5. 相場目安取得日に 2026-00-10 (0月)
+      const c5 = JSON.parse(JSON.stringify(SAMPLE_BOTTLES)) as BottleRecord[];
+      c5[0]!.referencePrice = {
+        estimatedPriceYen: 3000,
+        fetchedDate: '2026-00-10',
+      };
+      const res5 = validateBackupData({ ...validBackup, bottles: c5 });
+      expect(res5.success).toBe(false);
+      if (!res5.success) {
+        expect(res5.error).toContain('相場目安取得日 (fetchedDate) は実在する有効な日付');
       }
     });
 
