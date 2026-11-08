@@ -44,6 +44,7 @@ export interface SakeCollectionDBSchema extends DBSchema {
 
 let dbInstance: IDBPDatabase<SakeCollectionDBSchema> | null = null;
 let dbPromise: Promise<IDBPDatabase<SakeCollectionDBSchema>> | null = null;
+let connectionGeneration = 0;
 
 /**
  * IndexedDB 接続を開く（シングルトン接続）
@@ -55,6 +56,7 @@ export async function getDb(): Promise<IDBPDatabase<SakeCollectionDBSchema>> {
   }
 
   if (!dbPromise) {
+    const currentGeneration = ++connectionGeneration;
     dbPromise = (async () => {
       try {
         const db = await openDB<SakeCollectionDBSchema>(DB_NAME, DB_VERSION, {
@@ -80,10 +82,21 @@ export async function getDb(): Promise<IDBPDatabase<SakeCollectionDBSchema>> {
             }
           },
         });
-        dbInstance = db;
+
+        // 接続完了時点で、この接続の世代が最新であるか確認
+        if (connectionGeneration === currentGeneration) {
+          dbInstance = db;
+        } else {
+          // 接続開始中に closeDb() が呼ばれていた場合:
+          // dbInstance には格納せず、開かれた接続を即座に閉じる
+          db.close();
+        }
+
         return db;
       } catch (err) {
-        dbPromise = null;
+        if (connectionGeneration === currentGeneration) {
+          dbPromise = null;
+        }
         throw err;
       }
     })();
@@ -96,6 +109,7 @@ export async function getDb(): Promise<IDBPDatabase<SakeCollectionDBSchema>> {
  * テスト用・リセット用：DB接続を閉じてシングルトンおよび保持した Promise を破棄
  */
 export function closeDb(): void {
+  connectionGeneration++;
   if (dbInstance) {
     dbInstance.close();
     dbInstance = null;
@@ -109,6 +123,9 @@ export function closeDb(): void {
           db.close();
         } catch {
           // すでにクローズ済みの場合は無視
+        }
+        if (dbInstance === db) {
+          dbInstance = null;
         }
       })
       .catch(() => {

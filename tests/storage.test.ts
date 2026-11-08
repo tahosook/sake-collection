@@ -69,6 +69,48 @@ describe('storage (IndexedDB 永続化レイヤー) テスト', () => {
       expect(db2).toBe(db3);
     });
 
+    it('接続開始中に closeDb() を呼び、その完了前に再度 getDb() を呼んでも正常に使える接続が返されること', async () => {
+      closeDb(); // 初期状態：未接続
+      // 1. 接続開始（await せず接続処理を走らせる）
+      const inFlightPromise = getDb();
+      // 2. 接続完了前に closeDb() を呼ぶ
+      closeDb();
+      // 3. 接続完了を待たずに再度 getDb() を呼ぶ
+      const activeDbPromise = getDb();
+
+      const [inFlightDb, activeDb] = await Promise.all([inFlightPromise, activeDbPromise]);
+
+      // inFlightDb は close されている
+      expect(inFlightDb).toBeDefined();
+
+      // activeDb は正常に開かれた接続であり、操作が成功すること
+      expect(activeDb).toBeDefined();
+      const bottles = await activeDb.getAll('bottles');
+      expect(Array.isArray(bottles)).toBe(true);
+
+      // さらにその後の getDb() も activeDb と同一の有効な接続を返すこと
+      const subsequentDb = await getDb();
+      expect(subsequentDb).toBe(activeDb);
+    });
+
+    it('接続開始中に closeDb() を呼び、初回の接続完了を待ってから再度 getDb() を呼んでも正常に使える接続が返されること', async () => {
+      closeDb(); // 初期状態：未接続
+      // 1. 接続開始
+      const inFlightPromise = getDb();
+      // 2. 接続完了前に closeDb()
+      closeDb();
+      // 3. 初回接続の完了を待機
+      await inFlightPromise;
+
+      // 4. 初回完了後に改めて getDb() を呼ぶ
+      const activeDb = await getDb();
+
+      // 5. 閉じた接続ではなく、正常に使える接続が返され操作ができること
+      expect(activeDb).toBeDefined();
+      const count = await activeDb.count('bottles');
+      expect(typeof count).toBe('number');
+    });
+
     it('メタデータの保存と取得が動作すること', async () => {
       await setMeta('appName', 'sake-collection');
       const val = await getMeta<string>('appName');
