@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { describe, it, expect } from 'vitest';
 import { SAMPLE_BOTTLES, SAMPLE_PHOTOS } from '../src/data/sampleData';
 import { SAKE_CATEGORIES, BOTTLE_STATUSES, BottleRecord } from '../src/types/sake';
@@ -37,6 +38,11 @@ describe('PR #1 検証環境セットアップテスト', () => {
         expect(bottle.referencePrice).toHaveProperty('estimatedPriceYen');
         // purchasePriceYen と estimatedPriceYen は別オブジェクト・別プロパティである
         expect(Object.is(bottle.purchaseInfo, bottle.referencePrice)).toBe(false);
+        // 推定値が null の場合も許容される型整合性の確認
+        if (bottle.referencePrice.estimatedPriceYen !== null) {
+          expect(typeof bottle.referencePrice.estimatedPriceYen).toBe('number');
+          expect(bottle.referencePrice.estimatedPriceYen).toBeGreaterThanOrEqual(0);
+        }
       }
     }
   });
@@ -47,8 +53,18 @@ describe('PR #1 検証環境セットアップテスト', () => {
     const bottleMap = new Map(SAMPLE_BOTTLES.map((b) => [b.id, b]));
 
     // 写真側から親ボトルへの検証
+    const HASH_REGEX = /^[0-9a-f]{64}$/i;
     for (const photo of SAMPLE_PHOTOS) {
       expect(photo.dataUrl.startsWith(`data:${photo.mimeType};base64,`)).toBe(true);
+      expect(HASH_REGEX.test(photo.contentHash)).toBe(true);
+
+      // JPEG バイト列から計算した実際の SHA-256 と contentHash が一致すること
+      const base64Part = photo.dataUrl.slice(`data:${photo.mimeType};base64,`.length);
+      const buf = Buffer.from(base64Part, 'base64');
+      const hash = crypto.createHash('sha256').update(buf).digest('hex');
+      expect(photo.contentHash.toLowerCase()).toBe(hash.toLowerCase());
+      expect(photo.byteSize).toBe(buf.length);
+
       const parentBottle = bottleMap.get(photo.bottleId);
       expect(parentBottle).toBeDefined();
       expect(parentBottle?.photoIds).toContain(photo.id);

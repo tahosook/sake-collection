@@ -1,27 +1,45 @@
 import { BottleRecord, PhotoRecord } from '../types/sake';
 
 /**
- * サンプル確認用のダミー画像（インライン JPEG Base64 Data URL）
+ * サンプル確認用のダミー写真定義（インライン JPEG Base64 Data URL）
  * 実写真ファイルをリポジトリに入れないルールの遵守
- * 最小限の有効な JPEG バイナリを Base64 化して提供
+ * 各ダミー写真は有効な JPEG バイト列（COM セグメント付き）を持ち、
+ * contentHash はその JPEG バイト列から実際に計算した SHA-256 64桁 hex 値
  */
-const MINIMAL_JPEG_BASE64 =
-  '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=';
+const DUMMY_PHOTO_1 = {
+  dataUrl: 'data:image/jpeg;base64,/9j//gAIcGhvdG8x/+AAEEpGSUYAAQEBAEgASAAA/9sAQwD//////////////////////////////////////////////////////////////////////////////////////8IACwgAAQABAQERAP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAT8Q',
+  byteSize: 144,
+  contentHash: '5b5fb70ef1caa9e30dc86acc6ace2cc51950471127e5e8f40b86e578de09da3d',
+};
 
-function createDummyPhotoDataUrl(): string {
-  return `data:image/jpeg;base64,${MINIMAL_JPEG_BASE64}`;
-}
+const DUMMY_PHOTO_2 = {
+  dataUrl: 'data:image/jpeg;base64,/9j//gAIcGhvdG8y/+AAEEpGSUYAAQEBAEgASAAA/9sAQwD//////////////////////////////////////////////////////////////////////////////////////8IACwgAAQABAQERAP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAT8Q',
+  byteSize: 144,
+  contentHash: 'fdc97e5aeac1833c3d04b5db20c2f3ea6ff4b0cfe84f370700a5b5faf4153863',
+};
+
+const DUMMY_PHOTO_3 = {
+  dataUrl: 'data:image/jpeg;base64,/9j//gAIcGhvdG8z/+AAEEpGSUYAAQEBAEgASAAA/9sAQwD//////////////////////////////////////////////////////////////////////////////////////8IACwgAAQABAQERAP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAT8Q',
+  byteSize: 144,
+  contentHash: '9e1c3229973ee03939708f65443ee752d0f9556f86497a0f73e89d444ce9190f',
+};
+
+const DUMMY_PHOTO_4 = {
+  dataUrl: 'data:image/jpeg;base64,/9j//gAIcGhvdG80/+AAEEpGSUYAAQEBAEgASAAA/9sAQwD//////////////////////////////////////////////////////////////////////////////////////8IACwgAAQABAQERAP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAT8Q',
+  byteSize: 144,
+  contentHash: '9120dfcaee4dc09335cbed9db2f7ffed25b06b9d53cacb63fc2365e107e16031',
+};
 
 export const SAMPLE_PHOTOS: PhotoRecord[] = [
   {
     id: '11111111-0001-4000-8000-000000000001',
     bottleId: '00000000-0001-4000-8000-000000000001',
     mimeType: 'image/jpeg',
-    dataUrl: createDummyPhotoDataUrl(),
+    dataUrl: DUMMY_PHOTO_1.dataUrl,
     width: 400,
     height: 500,
-    byteSize: 1024,
-    contentHash: 'hash-sample-photo-001',
+    byteSize: DUMMY_PHOTO_1.byteSize,
+    contentHash: DUMMY_PHOTO_1.contentHash,
     driveFileId: null,
     createdAt: '2026-10-01T10:00:00.000Z',
     updatedAt: '2026-10-01T10:00:00.000Z',
@@ -31,11 +49,11 @@ export const SAMPLE_PHOTOS: PhotoRecord[] = [
     id: '11111111-0001-4000-8000-000000000002',
     bottleId: '00000000-0001-4000-8000-000000000001',
     mimeType: 'image/jpeg',
-    dataUrl: createDummyPhotoDataUrl(),
+    dataUrl: DUMMY_PHOTO_2.dataUrl,
     width: 400,
     height: 500,
-    byteSize: 1024,
-    contentHash: 'hash-sample-photo-002',
+    byteSize: DUMMY_PHOTO_2.byteSize,
+    contentHash: DUMMY_PHOTO_2.contentHash,
     driveFileId: null,
     createdAt: '2026-10-01T10:00:00.000Z',
     updatedAt: '2026-10-01T10:00:00.000Z',
@@ -45,11 +63,11 @@ export const SAMPLE_PHOTOS: PhotoRecord[] = [
     id: '11111111-0002-4000-8000-000000000001',
     bottleId: '00000000-0001-4000-8000-000000000002',
     mimeType: 'image/jpeg',
-    dataUrl: createDummyPhotoDataUrl(),
+    dataUrl: DUMMY_PHOTO_3.dataUrl,
     width: 400,
     height: 500,
-    byteSize: 1024,
-    contentHash: 'hash-sample-photo-003',
+    byteSize: DUMMY_PHOTO_3.byteSize,
+    contentHash: DUMMY_PHOTO_3.contentHash,
     driveFileId: null,
     createdAt: '2026-10-15T10:00:00.000Z',
     updatedAt: '2026-10-15T10:00:00.000Z',
@@ -59,11 +77,11 @@ export const SAMPLE_PHOTOS: PhotoRecord[] = [
     id: '11111111-0003-4000-8000-000000000001',
     bottleId: '00000000-0002-4000-8000-000000000001',
     mimeType: 'image/jpeg',
-    dataUrl: createDummyPhotoDataUrl(),
+    dataUrl: DUMMY_PHOTO_4.dataUrl,
     width: 400,
     height: 500,
-    byteSize: 1024,
-    contentHash: 'hash-sample-photo-004',
+    byteSize: DUMMY_PHOTO_4.byteSize,
+    contentHash: DUMMY_PHOTO_4.contentHash,
     driveFileId: null,
     createdAt: '2026-09-01T10:00:00.000Z',
     updatedAt: '2026-09-01T10:00:00.000Z',

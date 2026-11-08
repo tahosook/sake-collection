@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { SAMPLE_BOTTLES, SAMPLE_PHOTOS } from '../src/data/sampleData';
 import { SAKE_CATEGORIES, BOTTLE_STATUSES, BottleRecord } from '../src/types/sake';
@@ -10,6 +11,7 @@ const __filename = fileURLToPath(import.meta.url);
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/;
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+const HASH_HEX_REGEX = /^[0-9a-f]{64}$/i;
 
 function assert(condition: boolean, message: string): asserts condition {
   if (!condition) {
@@ -122,10 +124,12 @@ function verifySampleData(): void {
       );
     }
     if (bottle.referencePrice !== null) {
-      assert(
-        typeof bottle.referencePrice.estimatedPriceYen === 'number' && bottle.referencePrice.estimatedPriceYen >= 0,
-        `相場目安推定値は正の数値である必要があります: ${bottle.id}`
-      );
+      if (bottle.referencePrice.estimatedPriceYen !== null) {
+        assert(
+          typeof bottle.referencePrice.estimatedPriceYen === 'number' && bottle.referencePrice.estimatedPriceYen >= 0,
+          `相場目安推定値は正の数値または null である必要があります: ${bottle.id}`
+        );
+      }
       if (bottle.referencePrice.fetchedDate !== null) {
         assert(
           DATE_REGEX.test(bottle.referencePrice.fetchedDate),
@@ -166,7 +170,23 @@ function verifySampleData(): void {
     assert(ISO_DATE_REGEX.test(photo.createdAt), `Photo createdAt が ISO 8601 UTC 形式ではありません: ${photo.createdAt}`);
     assert(ISO_DATE_REGEX.test(photo.updatedAt), `Photo updatedAt が ISO 8601 UTC 形式ではありません: ${photo.updatedAt}`);
     assert(typeof photo.deleted === 'boolean', `Photo deleted が boolean ではありません: ${photo.id}`);
-    assert(typeof photo.contentHash === 'string' && photo.contentHash.length > 0, `Photo contentHash が不正です: ${photo.id}`);
+    assert(
+      HASH_HEX_REGEX.test(photo.contentHash),
+      `Photo contentHash は64桁の16進文字列(SHA-256 hex)である必要があります: ${photo.id}`
+    );
+
+    // 実際の JPEG バイト列から計算した SHA-256 ハッシュおよびバイト長との整合性検証
+    const base64Data = photo.dataUrl.slice(expectedPrefix.length);
+    const imageBuffer = Buffer.from(base64Data, 'base64');
+    const calculatedHash = crypto.createHash('sha256').update(imageBuffer).digest('hex');
+    assert(
+      calculatedHash.toLowerCase() === photo.contentHash.toLowerCase(),
+      `Photo contentHash が JPEG バイト列の実際の SHA-256 値と一致しません (期待値: ${calculatedHash}, 実際値: ${photo.contentHash}): ${photo.id}`
+    );
+    assert(
+      photo.byteSize === imageBuffer.length,
+      `Photo byteSize (${photo.byteSize}) が実際の JPEG バイト長 (${imageBuffer.length}) と一致しません: ${photo.id}`
+    );
 
     // 双方向参照整合性：photo.bottleId のボトルが存在し、そのボトルの photoIds に photo.id が含まれていること
     const parentBottle = bottleMap.get(photo.bottleId);
