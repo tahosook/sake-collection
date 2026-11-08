@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { SAMPLE_BOTTLES, SAMPLE_PHOTOS } from '../src/data/sampleData';
 import { SAKE_CATEGORIES, BOTTLE_STATUSES, BottleRecord } from '../src/types/sake';
 import { CATEGORY_ORDER, isSakeCategory, CATEGORY_ATTRIBUTE_LABELS } from '../src/domain/categories';
+import { STATUS_LABELS } from '../src/domain/status';
 
 describe('PR #1 検証環境セットアップテスト', () => {
   it('固定10種類が定義されており判定ガードが正しく動作すること', () => {
@@ -22,6 +23,7 @@ describe('PR #1 検証環境セットアップテスト', () => {
     const statuses = new Set(SAMPLE_BOTTLES.map((b) => b.status));
     for (const status of BOTTLE_STATUSES) {
       expect(statuses.has(status)).toBe(true);
+      expect(STATUS_LABELS[status]).toBeDefined();
     }
 
     const categories = new Set(SAMPLE_BOTTLES.map((b) => b.category));
