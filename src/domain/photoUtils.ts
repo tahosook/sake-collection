@@ -1,5 +1,6 @@
 import { PhotoRecord } from '../types/sake';
 import { generateUuid } from './uuid';
+import { computeSha256 } from './sha256';
 
 export const MAX_PHOTO_COUNT = 10;
 export const MAX_IMAGE_DIMENSION = 1600;
@@ -63,16 +64,7 @@ export async function computeDataUrlHashAndSize(
   }
 
   const byteSize = bytes.byteLength;
-
-  // SHA-256 ハッシュ計算
-  let contentHash = '';
-  if (globalThis.crypto?.subtle?.digest) {
-    const hashBuffer = await globalThis.crypto.subtle.digest('SHA-256', bytes as unknown as BufferSource);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    contentHash = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('').toLowerCase();
-  } else {
-    throw new Error('Web Crypto API (crypto.subtle.digest) が利用できません');
-  }
+  const contentHash = await computeSha256(bytes);
 
   return {
     contentHash,
