@@ -371,6 +371,46 @@ describe('写真処理と保存トランザクション (PR #7)', () => {
       expect(backupVal.success).toBe(true);
     });
 
+    it('saveBottlesBatchWithPhotos: 未保存のドラフト写真（newPhotos）を元に複数本一括登録でクローン保存できること', async () => {
+      const dummySrcPhoto = createDummyPhoto('temp-src-photo', 'temp-bottle');
+      const batchResult = createBottlesBatch(
+        {
+          name: '一括登録テスト酒',
+          category: '日本酒',
+          photoIds: [dummySrcPhoto.id],
+          primaryPhotoId: dummySrcPhoto.id,
+        },
+        3
+      );
+
+      await saveBottlesBatchWithPhotos(
+        batchResult.bottles,
+        [dummySrcPhoto],
+        batchResult.photosToClone
+      );
+
+      const bottles = await getAllBottles(false);
+      expect(bottles).toHaveLength(3);
+
+      const photos = await getAllPhotos(false);
+      // クローンされた3枚のみが保存され、元の一時写真（dummySrcPhoto）は参照されていないため保存されないこと
+      expect(photos).toHaveLength(3);
+      expect(photos.map((p) => p.id)).not.toContain(dummySrcPhoto.id);
+
+      // 各ボトルが独立した写真を持つこと
+      for (const b of bottles) {
+        expect(b.photoIds).toHaveLength(1);
+        const p = await getPhoto(b.photoIds[0]!);
+        expect(p).toBeDefined();
+        expect(p?.bottleId).toBe(b.id);
+      }
+
+      // バックアップ整合性
+      const backup = await exportBackupData();
+      const backupVal = validateBackupData(backup);
+      expect(backupVal.success).toBe(true);
+    });
+
     it('deleteBottle: ボトル論理削除時に紐づく写真も同一トランザクションで論理削除されること', async () => {
       const bottleId = crypto.randomUUID();
       const photoId1 = crypto.randomUUID();

@@ -283,7 +283,9 @@ export async function saveBottlesBatchWithPhotos(
       for (const ptc of photosToClone) {
         let src = sourcePhotoCache.get(ptc.sourcePhotoId);
         if (src === undefined && !sourcePhotoCache.has(ptc.sourcePhotoId)) {
-          src = await photoStore.get(ptc.sourcePhotoId);
+          src =
+            newPhotos.find((p) => p.id === ptc.sourcePhotoId) ??
+            (await photoStore.get(ptc.sourcePhotoId));
           sourcePhotoCache.set(ptc.sourcePhotoId, src);
         }
 
@@ -320,9 +322,12 @@ export async function saveBottlesBatchWithPhotos(
       await bottleStore.put(bottle);
     }
 
-    // 3. 新規写真保存
+    // 3. 新規写真保存（いずれかのボトルから直接参照されている写真のみ保存）
+    const allReferencedPhotoIds = new Set(bottles.flatMap((b) => b.photoIds));
     for (const photo of newPhotos) {
-      await photoStore.put(photo);
+      if (allReferencedPhotoIds.has(photo.id)) {
+        await photoStore.put(photo);
+      }
     }
 
     // 4. クローン写真保存
