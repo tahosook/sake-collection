@@ -11,7 +11,6 @@ import { GroupDetailSheet } from './components/GroupDetailSheet';
 import { BottleDetailModal } from './components/BottleDetailModal';
 import { BottleFormModal } from './components/BottleFormModal';
 import { DataManagementView } from './components/DataManagementView';
-import { PlusIcon } from './components/Icons';
 
 export const App: React.FC = () => {
   const {
@@ -32,6 +31,8 @@ export const App: React.FC = () => {
 
   // ナビゲーションタブ
   const [activeTab, setActiveTab] = useState<TabKey>('inventory');
+  // 「飲んだ記録」画面内のサブ切り替え（飲んだ / 手放した）
+  const [historySubTab, setHistorySubTab] = useState<'finished' | 'disposed'>('finished');
 
   // 検索・絞り込み状態
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -130,6 +131,16 @@ export const App: React.FC = () => {
       }
     } else {
       const created = await addBottle(data);
+      // 登録したお酒のステータスに応じた一覧画面へ切り替え
+      if (created.status === 'finished') {
+        setActiveTab('finished');
+        setHistorySubTab('finished');
+      } else if (created.status === 'disposed') {
+        setActiveTab('finished');
+        setHistorySubTab('disposed');
+      } else {
+        setActiveTab('inventory');
+      }
       setSelectedBottleForDetail(created);
     }
   };
@@ -145,21 +156,11 @@ export const App: React.FC = () => {
             </h1>
             <p className="text-[11px] text-stone-500 font-medium">
               {activeTab === 'inventory' && 'いま家にある酒'}
-              {activeTab === 'finished' && '飲んだ記録（時系列）'}
-              {activeTab === 'disposed' && '手放した酒'}
+              {activeTab === 'finished' &&
+                (historySubTab === 'finished' ? '飲んだ記録（時系列）' : '手放した酒')}
               {activeTab === 'settings' && 'データ管理・設定'}
             </p>
           </div>
-
-          {/* 新規登録ボタン */}
-          <button
-            type="button"
-            onClick={handleOpenCreate}
-            className="min-h-touch px-3 py-1.5 bg-stone-900 hover:bg-stone-800 active:scale-95 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 shadow-sm"
-          >
-            <PlusIcon className="w-4 h-4" />
-            <span>登録</span>
-          </button>
         </div>
       </header>
 
@@ -179,7 +180,7 @@ export const App: React.FC = () => {
               お酒のデータがありません
             </h2>
             <p className="text-xs text-stone-600 leading-relaxed">
-              受入確認用のサンプルデータを読み込むか、上の「＋ 登録」からお持ちのお酒を手入力で登録してください。
+              受入確認用のサンプルデータを読み込むか、下部の「登録」からお持ちのお酒を手入力で登録してください。
             </p>
             <div className="pt-2 flex flex-col gap-2">
               <button
@@ -242,39 +243,56 @@ export const App: React.FC = () => {
               </div>
             )}
 
-            {/* 2. 飲んだ記録（時系列一覧） */}
+            {/* 2. 飲んだ記録（画面内切り替え: 飲んだ / 手放した） */}
             {activeTab === 'finished' && (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs text-stone-500 px-1">
-                  <span>飲み切り記録: {filteredFinishedBottles.length}本</span>
+              <div className="space-y-3">
+                {/* 飲んだ / 手放した 切り替えタブ */}
+                <div className="grid grid-cols-2 p-1 bg-stone-200/80 rounded-xl gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setHistorySubTab('finished')}
+                    className={`min-h-touch py-2 text-xs font-bold rounded-lg transition ${
+                      historySubTab === 'finished'
+                        ? 'bg-white text-stone-900 shadow-sm'
+                        : 'text-stone-600 hover:text-stone-900'
+                    }`}
+                  >
+                    飲んだ記録 ({filteredFinishedBottles.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setHistorySubTab('disposed')}
+                    className={`min-h-touch py-2 text-xs font-bold rounded-lg transition ${
+                      historySubTab === 'disposed'
+                        ? 'bg-white text-stone-900 shadow-sm'
+                        : 'text-stone-600 hover:text-stone-900'
+                    }`}
+                  >
+                    手放した酒 ({filteredDisposedBottles.length})
+                  </button>
                 </div>
-                <BottleHistoryList
-                  bottles={filteredFinishedBottles}
-                  photos={photos}
-                  onSelectBottle={setSelectedBottleForDetail}
-                  emptyMessage="飲み切ったお酒の記録はありません"
-                  type="finished"
-                />
+
+                {historySubTab === 'finished' ? (
+                  <BottleHistoryList
+                    bottles={filteredFinishedBottles}
+                    photos={photos}
+                    onSelectBottle={setSelectedBottleForDetail}
+                    emptyMessage="飲み切ったお酒の記録はありません"
+                    type="finished"
+                  />
+                ) : (
+                  <BottleHistoryList
+                    bottles={filteredDisposedBottles}
+                    photos={photos}
+                    onSelectBottle={setSelectedBottleForDetail}
+                    emptyMessage="手放したお酒の記録はありません"
+                    type="disposed"
+                  />
+                )}
               </div>
             )}
 
-            {/* 3. 手放した酒一覧 */}
-            {activeTab === 'disposed' && (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs text-stone-500 px-1">
-                  <span>手放したお酒: {filteredDisposedBottles.length}本</span>
-                </div>
-                <BottleHistoryList
-                  bottles={filteredDisposedBottles}
-                  photos={photos}
-                  onSelectBottle={setSelectedBottleForDetail}
-                  emptyMessage="手放したお酒の記録はありません"
-                  type="disposed"
-                />
-              </div>
-            )}
-
-            {/* 4. データ管理・設定 */}
+            {/* 3. データ管理・設定 */}
             {activeTab === 'settings' && (
               <DataManagementView
                 bottles={bottles}
@@ -333,10 +351,12 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* 主要ボトムナビゲーション */}
+      {/* 主要ボトムナビゲーション（家にある酒 / 飲んだ記録 / 登録 / データ管理） */}
       <Navigation
         activeTab={activeTab}
+        isRegisterOpen={isFormModalOpen && !editingBottle}
         onSelectTab={setActiveTab}
+        onOpenCreate={handleOpenCreate}
         inventoryCount={inventoryBottles.length}
         finishedCount={finishedBottles.length}
       />
