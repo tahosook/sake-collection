@@ -180,14 +180,166 @@ export async function saveBottles(bottles: BottleRecord[]): Promise<void> {
 
 /**
  * ボトルを論理削除する（deleted = true, updatedAt = now）
+ * 紐づく写真レコードも同一トランザクションで論理削除する（設計 §3.3 準拠）
  */
 export async function deleteBottle(id: string, nowIso: string = new Date().toISOString()): Promise<void> {
   const db = await getDb();
-  const bottle = await db.get('bottles', id);
+  const tx = db.transaction(['bottles', 'photos'], 'readwrite');
+  const bottleStore = tx.objectStore('bottles');
+  const photoStore = tx.objectStore('photos');
+
+  const bottle = await bottleStore.get(id);
   if (bottle) {
     bottle.deleted = true;
     bottle.updatedAt = nowIso;
-    await db.put('bottles', bottle);
+    await bottleStore.put(bottle);
+
+    // 紐づく写真もすべて論理削除
+    const relatedPhotos = await photoStore.index('by_bottleId').getAll(id);
+    for (const p of relatedPhotos) {
+      p.deleted = true;
+      p.updatedAt = nowIso;
+      await photoStore.put(p);
+    }
+  }
+
+  await tx.done;
+}
+
+/**
+ * ボトルと関連写真を単一トランザクションで保存する
+ *
+ * 要件（設計 §3.3 確定仕様）:
+ * - ボトルレコードを保存
+ * - newPhotos に渡された新規・更新写真を保存
+ * - ボトルの photoIds から外された写真のうち、Drive に未同期のローカル写真（driveFileId === null）は
+ *   不要データ残存防止およびバックアップ双方向整合性（parentBottle.photoIds.includes(photo.id)）維持のため
+ *   photos ストアから物理削除する
+ */
+export async function saveBottleWithPhotos(
+  bottle: BottleRecord,
+  newPhotos: PhotoRecord[] = []
+): Promise<void> {
+  const db = await getDb();
+  const tx = db.transaction(['bottles', 'photos'], 'readwrite');
+  const bottleStore = tx.objectStore('bottles');
+  const photoStore = tx.objectStore('photos');
+
+  // 1. ボトル保存
+  await bottleStore.put(bottle);
+
+  // 2. 新規写真保存
+  for (const photo of newPhotos) {
+    await photoStore.put(photo);
+  }
+
+  // 3. このボトルに現在紐づく写真のうち、photoIds から外れた未同期ローカル写真を物理削除
+  const existingPhotos = await photoStore.index('by_bottleId').getAll(bottle.id);
+  const activePhotoIdSet = new Set(bottle.photoIds);
+
+  for (const p of existingPhotos) {
+    if (!activePhotoIdSet.has(p.id) && p.driveFileId === null) {
+      await photoStore.delete(p.id);
+    }
+  }
+
+  await tx.done;
+}
+
+/**
+ * 写真のクローン指定インターフェース
+ */
+export interface PhotoCloneInstruction {
+  sourcePhotoId: string;
+  newPhotoId: string;
+  bottleId?: string;
+}
+
+/**
+ * 複数ボトルと写真を単一トランザクションで一括保存する
+ *
+ * 要件:
+ * - 複数本一括登録（createBottlesBatch）および既存銘柄流用時の写真複製に対応
+ * - クローン元の写真レコードから画像データ（dataUrl, contentHash 等）を引き継ぎ、
+ *   新しい PhotoRecord（新UUID・各ボトルのbottleId）を生成して保存する
+ */
+export async function saveBottlesBatchWithPhotos(
+  bottles: BottleRecord[],
+  newPhotos: PhotoRecord[] = [],
+  photosToClone: PhotoCloneInstruction[] = [],
+  nowIso: string = new Date().toISOString()
+): Promise<void> {
+  const db = await getDb();
+  const tx = db.transaction(['bottles', 'photos'], 'readwrite');
+  const bottleStore = tx.objectStore('bottles');
+  const photoStore = tx.objectStore('photos');
+
+  try {
+    // 1. クローン対象の写真の検証とオブジェクト生成
+    const clonedPhotos: PhotoRecord[] = [];
+    if (photosToClone.length > 0) {
+      const sourcePhotoCache = new Map<string, PhotoRecord | undefined>();
+
+      for (const ptc of photosToClone) {
+        let src = sourcePhotoCache.get(ptc.sourcePhotoId);
+        if (src === undefined && !sourcePhotoCache.has(ptc.sourcePhotoId)) {
+          src = await photoStore.get(ptc.sourcePhotoId);
+          sourcePhotoCache.set(ptc.sourcePhotoId, src);
+        }
+
+        if (!src) {
+          throw new Error(`クローン元の写真レコードが見つかりません (sourcePhotoId: ${ptc.sourcePhotoId})`);
+        }
+
+        // bottleId の決定
+        let targetBottleId = ptc.bottleId;
+        if (!targetBottleId) {
+          const ownerBottle = bottles.find((b) => b.photoIds.includes(ptc.newPhotoId));
+          targetBottleId = ownerBottle ? ownerBottle.id : src.bottleId;
+        }
+
+        clonedPhotos.push({
+          id: ptc.newPhotoId,
+          bottleId: targetBottleId,
+          mimeType: src.mimeType,
+          dataUrl: src.dataUrl,
+          width: src.width,
+          height: src.height,
+          byteSize: src.byteSize,
+          contentHash: src.contentHash,
+          driveFileId: null,
+          createdAt: nowIso,
+          updatedAt: nowIso,
+          deleted: false,
+        });
+      }
+    }
+
+    // 2. ボトル全件保存
+    for (const bottle of bottles) {
+      await bottleStore.put(bottle);
+    }
+
+    // 3. 新規写真保存
+    for (const photo of newPhotos) {
+      await photoStore.put(photo);
+    }
+
+    // 4. クローン写真保存
+    for (const photo of clonedPhotos) {
+      await photoStore.put(photo);
+    }
+
+    await tx.done;
+  } catch (err) {
+    try {
+      tx.abort();
+    } catch {
+      // 既に abort 済みの場合は無視
+    }
+    // tx.done の AbortError を消費して Unhandled Rejection を防ぐ
+    await tx.done.catch(() => {});
+    throw err;
   }
 }
 

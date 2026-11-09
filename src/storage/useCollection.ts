@@ -4,6 +4,9 @@ import {
   getAllBottles,
   getAllPhotos,
   saveBottle,
+  saveBottleWithPhotos,
+  saveBottlesBatchWithPhotos,
+  PhotoCloneInstruction,
   deleteBottle as dbDeleteBottle,
   exportBackupData,
   importBackupData,
@@ -37,6 +40,16 @@ export interface UseCollectionReturn {
 
   /** ボトルを更新して永続化 */
   updateBottle: (bottle: BottleRecord) => Promise<void>;
+
+  /** ボトルと関連写真を単一トランザクションで保存・更新・クリーンアップ */
+  saveBottleAndPhotos: (bottle: BottleRecord, newPhotos?: PhotoRecord[]) => Promise<void>;
+
+  /** 複数ボトルと写真を単一トランザクションで一括保存（写真クローン含む） */
+  saveBottlesBatch: (
+    bottles: BottleRecord[],
+    newPhotos?: PhotoRecord[],
+    photosToClone?: PhotoCloneInstruction[]
+  ) => Promise<void>;
 
   /** ボトルの状態を変更して日付ルールを適用・永続化 */
   changeBottleStatus: (
@@ -113,6 +126,30 @@ export function useCollection(): UseCollectionReturn {
     [refresh]
   );
 
+  const saveBottleAndPhotos = useCallback(
+    async (bottle: BottleRecord, newPhotos: PhotoRecord[] = []): Promise<void> => {
+      const updated: BottleRecord = {
+        ...bottle,
+        updatedAt: new Date().toISOString(),
+      };
+      await saveBottleWithPhotos(updated, newPhotos);
+      await refresh();
+    },
+    [refresh]
+  );
+
+  const saveBottlesBatch = useCallback(
+    async (
+      bottlesToSave: BottleRecord[],
+      newPhotos: PhotoRecord[] = [],
+      photosToClone: PhotoCloneInstruction[] = []
+    ): Promise<void> => {
+      await saveBottlesBatchWithPhotos(bottlesToSave, newPhotos, photosToClone);
+      await refresh();
+    },
+    [refresh]
+  );
+
   const changeBottleStatus = useCallback(
     async (
       bottleId: string,
@@ -178,6 +215,8 @@ export function useCollection(): UseCollectionReturn {
     refresh,
     addBottle,
     updateBottle,
+    saveBottleAndPhotos,
+    saveBottlesBatch,
     changeBottleStatus,
     deleteBottle,
     exportBackup,
