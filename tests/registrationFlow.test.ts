@@ -242,6 +242,50 @@ describe('登録フロー統合ロジックテスト (PR #8)', () => {
       expect(result.merged.sources).toHaveLength(1);
       expect(result.merged.referencePrice?.estimatedPriceYen).toBe(3000);
     });
+
+    it('手動で空欄にした項目が再取り込みで復活せず、未編集のnull項目はそのままnullになること', () => {
+      const currentBottle = {
+        name: '手修正した銘柄名',
+        category: '日本酒' as const,
+        status: 'unopened' as const,
+        volumeMl: null, // ユーザーが空欄にした
+        abv: null,      // ユーザーが空欄にした
+        categoryAttributes: {},
+        description: null,
+        sources: [],
+        referencePrice: {
+          estimatedPriceYen: 5000,
+          fetchedDate: '2026-11-01',
+        },
+      };
+
+      const payload: GeminiImportPayload = {
+        name: 'Gemini銘柄',
+        category: '日本酒',
+        abv: 16.0,
+        volumeMl: 720,
+        categoryAttributes: { brewery: '新蔵元' },
+        description: null,
+        sources: [],
+        referencePrice: null, // 相場目安なし
+      };
+
+      // volumeMl と abv を手動で空欄にした
+      const userEdited = ['volumeMl', 'abv'];
+      const result = mergeGeminiPayloadIntoBottle(currentBottle, payload, userEdited);
+
+      // 手動で空欄にした項目は null のまま保護され、skippedFields に記録される
+      expect(result.merged.volumeMl).toBeNull();
+      expect(result.merged.abv).toBeNull();
+      expect(result.skippedFields).toContain('volumeMl');
+      expect(result.skippedFields).toContain('abv');
+
+      // 未編集だった referencePrice は payload の null が反映されて null になる
+      expect(result.merged.referencePrice).toBeNull();
+      // 未編集の name, categoryAttributes は payload の値で更新される
+      expect(result.merged.name).toBe('Gemini銘柄');
+      expect((result.merged.categoryAttributes as { brewery?: string }).brewery).toBe('新蔵元');
+    });
   });
 
   describe('複数本一括登録と写真クローン・IndexedDB保存', () => {

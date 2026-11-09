@@ -351,33 +351,28 @@ export const BottleFormModal: React.FC<BottleFormModalProps> = ({
       Array.from(userEditedFields)
     );
 
-    // フォームへ反映
+    // フォームへ反映（取り込み・マージ結果が null の項目は入力欄を空にする）
     setName(merged.name);
     setCategory(merged.category);
-    if (merged.volumeMl !== null) setVolumeMl(String(merged.volumeMl));
-    if (merged.abv !== null) setAbv(String(merged.abv));
+    setVolumeMl(merged.volumeMl !== null ? String(merged.volumeMl) : '');
+    setAbv(merged.abv !== null ? String(merged.abv) : '');
     setAttributes((merged.categoryAttributes as Record<string, string | number>) ?? {});
 
-    if (merged.description) {
-      setSummary(merged.description.summary);
-      setTasteProfile(merged.description.tasteProfile);
-      setBackground(merged.description.background);
-      setServingSuggestion(merged.description.servingSuggestion);
-    }
+    setSummary(merged.description?.summary ?? '');
+    setTasteProfile(merged.description?.tasteProfile ?? '');
+    setBackground(merged.description?.background ?? '');
+    setServingSuggestion(merged.description?.servingSuggestion ?? '');
 
-    if (merged.sources) {
-      setSources(merged.sources);
-    }
+    setSources(merged.sources ? [...merged.sources] : []);
 
-    if (merged.referencePrice) {
-      setEstimatedPriceYen(
-        merged.referencePrice.estimatedPriceYen !== null
-          ? String(merged.referencePrice.estimatedPriceYen)
-          : ''
-      );
-      setFetchedDate(merged.referencePrice.fetchedDate ?? '');
-      setReferencePriceNote(merged.referencePrice.note ?? '');
-    }
+    setEstimatedPriceYen(
+      merged.referencePrice?.estimatedPriceYen !== null &&
+      merged.referencePrice?.estimatedPriceYen !== undefined
+        ? String(merged.referencePrice.estimatedPriceYen)
+        : ''
+    );
+    setFetchedDate(merged.referencePrice?.fetchedDate ?? '');
+    setReferencePriceNote(merged.referencePrice?.note ?? '');
 
     return { skippedFields };
   };
