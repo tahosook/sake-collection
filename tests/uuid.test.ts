@@ -66,16 +66,24 @@ describe('generateUuid', () => {
     expect(set.size).toBe(50);
   });
 
-  it('Web Crypto API が全く存在しない極端な環境でも Math.random フォールバックで UUID 形式を生成できる', () => {
+  it('安全な乱数源（crypto.randomUUID および crypto.getRandomValues）が存在しない場合は明示的にエラーを投げること', () => {
     Object.defineProperty(globalThis, 'crypto', {
       value: undefined,
       writable: true,
       configurable: true,
     });
 
-    const uuid = generateUuid();
-    expect(uuid).toMatch(UUID_V4_REGEX);
-    expect(uuid.length).toBe(36);
+    expect(() => generateUuid()).toThrow('暗号論的疑似乱数生成器（Web Crypto API）が利用できないため、UUID を生成できません。');
+  });
+
+  it('crypto オブジェクトはあるが getRandomValues も randomUUID も利用できない場合は明示的にエラーを投げること', () => {
+    Object.defineProperty(globalThis, 'crypto', {
+      value: {},
+      writable: true,
+      configurable: true,
+    });
+
+    expect(() => generateUuid()).toThrow('暗号論的疑似乱数生成器（Web Crypto API）が利用できないため、UUID を生成できません。');
   });
 
   it('非セキュア環境下で createNewBottle を呼び出しても例外なく UUID が生成されてボトルが作成できる', () => {

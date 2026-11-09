@@ -5,6 +5,9 @@
  * HTTP の LAN アクセス（例: http://192.168.x.x:5174/）など非セキュアコンテキスト環境では、
  * crypto.randomUUID が未定義（undefined）となるため、非セキュア環境でも利用可能な
  * crypto.getRandomValues() を用いた v4 UUID 生成に安全にフォールバックする。
+ *
+ * なお、安全な乱数源が存在しない環境では、暗号論的に弱い乱数（Math.random 等）で ID を
+ * 生成せず、明示的に例外を投げる。
  */
 export function generateUuid(): string {
   if (typeof globalThis.crypto?.randomUUID === 'function') {
@@ -36,10 +39,5 @@ export function generateUuid(): string {
     );
   }
 
-  // フォールバック: 万一どちらも存在しない環境向けの Math.random フォールバック
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
+  throw new Error('暗号論的疑似乱数生成器（Web Crypto API）が利用できないため、UUID を生成できません。');
 }
