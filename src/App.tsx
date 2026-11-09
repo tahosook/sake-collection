@@ -325,9 +325,11 @@ export const App: React.FC = () => {
                     photos={photos}
                     onSelectBottle={setSelectedBottleForDetail}
                     emptyMessage={
-                      wantToBuyAgainOnly
+                      finishedBottles.length === 0
+                        ? '飲み切ったお酒の記録はありません'
+                        : wantToBuyAgainOnly && !finishedBottles.some((b) => b.wantToBuyAgain)
                         ? '「また買いたい」印のある飲んだ記録はありません'
-                        : searchQuery || selectedCategory !== 'all'
+                        : searchQuery || selectedCategory !== 'all' || wantToBuyAgainOnly
                         ? '条件に一致するお酒がありません'
                         : '飲み切ったお酒の記録はありません'
                     }
