@@ -11,6 +11,7 @@ import {
 } from '../types/sake';
 import { isValidCalendarDate } from './validation';
 import { generateGroupKey, normalizeSakeName } from './sortAndGroup';
+import { generateUuid } from './uuid';
 
 /**
  * 現在の日付文字列を YYYY-MM-DD 形式で取得する (ローカル暦日基準)
@@ -164,7 +165,7 @@ export function createNewBottle<C extends SakeCategory>(
   options: { nowIso?: string; id?: string } = {}
 ): BottleRecord<C> {
   const nowIso = options.nowIso ?? new Date().toISOString();
-  const id = options.id ?? crypto.randomUUID();
+  const id = options.id ?? generateUuid();
   const status = input.status ?? 'unopened';
 
   let openedDate = input.openedDate ?? null;
@@ -346,7 +347,7 @@ export function createReuseDraftFromBottle<C extends SakeCategory = SakeCategory
 
   if (copyPhotos && source.photoIds.length > 0) {
     for (const srcPid of source.photoIds) {
-      const newPid = crypto.randomUUID();
+      const newPid = generateUuid();
       newPhotoIds.push(newPid);
       photosToClone.push({
         sourcePhotoId: srcPid,
@@ -428,14 +429,14 @@ export function createBottlesBatch<C extends SakeCategory>(
   const sourcePrimaryId = input.primaryPhotoId ?? (sourcePhotoIds[0] ?? null);
 
   for (let i = 0; i < safeCount; i++) {
-    const bottleId = crypto.randomUUID();
+    const bottleId = generateUuid();
 
     // 各ボトル固有の写真 ID マッピングを生成
     const newPhotoIds: string[] = [];
     let newPrimaryPhotoId: string | null = null;
 
     for (const srcPid of sourcePhotoIds) {
-      const newPid = crypto.randomUUID();
+      const newPid = generateUuid();
       newPhotoIds.push(newPid);
       photosToClone.push({
         sourcePhotoId: srcPid,

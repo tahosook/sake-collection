@@ -1,4 +1,5 @@
 import { PhotoRecord } from '../types/sake';
+import { generateUuid } from './uuid';
 
 export const MAX_PHOTO_COUNT = 10;
 export const MAX_IMAGE_DIMENSION = 1600;
@@ -174,7 +175,7 @@ export async function processImageFileToPhotoRecord(
   bottleId: string,
   options: { nowIso?: string; photoId?: string } = {}
 ): Promise<PhotoRecord> {
-  const photoId = options.photoId ?? crypto.randomUUID();
+  const photoId = options.photoId ?? generateUuid();
   const nowIso = options.nowIso ?? new Date().toISOString();
 
   let origWidth = 0;

@@ -25,6 +25,7 @@ import {
   removePhotoFromDraft,
   replacePhotoInDraft,
 } from '../domain/photoUtils';
+import { generateUuid } from '../domain/uuid';
 import {
   mergeGeminiPayloadIntoBottle,
   GeminiImportPayload,
@@ -59,7 +60,7 @@ export const BottleFormModal: React.FC<BottleFormModalProps> = ({
 }) => {
   const isEditing = Boolean(initialBottle);
   // 一時的なボトルID（新規登録時の写真の関連付け用）
-  const tempBottleId = useMemo(() => initialBottle?.id ?? crypto.randomUUID(), [initialBottle?.id]);
+  const tempBottleId = useMemo(() => initialBottle?.id ?? generateUuid(), [initialBottle?.id]);
 
   // モーダル管理（流用ピッカー）
   const [isReuseModalOpen, setIsReuseModalOpen] = useState<boolean>(false);
