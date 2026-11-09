@@ -274,28 +274,23 @@ export async function saveBottlesBatchWithPhotos(
   const bottleStore = tx.objectStore('bottles');
   const photoStore = tx.objectStore('photos');
 
-  // 1. ボトル全件保存
-  for (const bottle of bottles) {
-    await bottleStore.put(bottle);
-  }
+  try {
+    // 1. クローン対象の写真の検証とオブジェクト生成
+    const clonedPhotos: PhotoRecord[] = [];
+    if (photosToClone.length > 0) {
+      const sourcePhotoCache = new Map<string, PhotoRecord | undefined>();
 
-  // 2. 新規写真保存
-  for (const photo of newPhotos) {
-    await photoStore.put(photo);
-  }
+      for (const ptc of photosToClone) {
+        let src = sourcePhotoCache.get(ptc.sourcePhotoId);
+        if (src === undefined && !sourcePhotoCache.has(ptc.sourcePhotoId)) {
+          src = await photoStore.get(ptc.sourcePhotoId);
+          sourcePhotoCache.set(ptc.sourcePhotoId, src);
+        }
 
-  // 3. 写真クローン処理
-  if (photosToClone.length > 0) {
-    const sourcePhotoCache = new Map<string, PhotoRecord | undefined>();
+        if (!src) {
+          throw new Error(`クローン元の写真レコードが見つかりません (sourcePhotoId: ${ptc.sourcePhotoId})`);
+        }
 
-    for (const ptc of photosToClone) {
-      let src = sourcePhotoCache.get(ptc.sourcePhotoId);
-      if (src === undefined && !sourcePhotoCache.has(ptc.sourcePhotoId)) {
-        src = await photoStore.get(ptc.sourcePhotoId);
-        sourcePhotoCache.set(ptc.sourcePhotoId, src);
-      }
-
-      if (src) {
         // bottleId の決定
         let targetBottleId = ptc.bottleId;
         if (!targetBottleId) {
@@ -303,7 +298,7 @@ export async function saveBottlesBatchWithPhotos(
           targetBottleId = ownerBottle ? ownerBottle.id : src.bottleId;
         }
 
-        const clonedPhoto: PhotoRecord = {
+        clonedPhotos.push({
           id: ptc.newPhotoId,
           bottleId: targetBottleId,
           mimeType: src.mimeType,
@@ -316,14 +311,36 @@ export async function saveBottlesBatchWithPhotos(
           createdAt: nowIso,
           updatedAt: nowIso,
           deleted: false,
-        };
-
-        await photoStore.put(clonedPhoto);
+        });
       }
     }
-  }
 
-  await tx.done;
+    // 2. ボトル全件保存
+    for (const bottle of bottles) {
+      await bottleStore.put(bottle);
+    }
+
+    // 3. 新規写真保存
+    for (const photo of newPhotos) {
+      await photoStore.put(photo);
+    }
+
+    // 4. クローン写真保存
+    for (const photo of clonedPhotos) {
+      await photoStore.put(photo);
+    }
+
+    await tx.done;
+  } catch (err) {
+    try {
+      tx.abort();
+    } catch {
+      // 既に abort 済みの場合は無視
+    }
+    // tx.done の AbortError を消費して Unhandled Rejection を防ぐ
+    await tx.done.catch(() => {});
+    throw err;
+  }
 }
 
 /**

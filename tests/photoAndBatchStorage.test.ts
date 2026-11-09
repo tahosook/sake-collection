@@ -304,6 +304,31 @@ describe('写真処理と保存トランザクション (PR #7)', () => {
       expect(backupVal.success).toBe(true);
     });
 
+    it('saveBottlesBatchWithPhotos: クローン元の写真が存在しない場合はエラーを投げ、ボトル保存も中断されること', async () => {
+      const missingSourcePhotoId = crypto.randomUUID();
+      const newBottleId = crypto.randomUUID();
+      const newPhotoId = crypto.randomUUID();
+
+      const bottle = createNewBottle({
+        name: 'クローン失敗テスト酒',
+        category: '焼酎',
+        photoIds: [newPhotoId],
+        primaryPhotoId: newPhotoId,
+      }, { id: newBottleId });
+
+      await expect(
+        saveBottlesBatchWithPhotos(
+          [bottle],
+          [],
+          [{ sourcePhotoId: missingSourcePhotoId, newPhotoId, bottleId: newBottleId }]
+        )
+      ).rejects.toThrow('クローン元の写真レコードが見つかりません');
+
+      // トランザクションが中断され、ボトルも写真も保存されていないこと
+      expect(await getBottle(newBottleId)).toBeUndefined();
+      expect(await getPhoto(newPhotoId)).toBeUndefined();
+    });
+
     it('createReuseDraftFromBottle と saveBottlesBatchWithPhotos の連携による流用保存', async () => {
       // 1. 流用元ボトルを保存
       const sourceBottleId = crypto.randomUUID();
