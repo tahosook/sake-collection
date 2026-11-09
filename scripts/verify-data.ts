@@ -359,11 +359,65 @@ function verifyNoRealPhotosOrData(): void {
   console.log('✓ 許可外JSON・画像ファイル混入防止検査完了: 混入ファイルなし (ホワイトリスト準拠)');
 }
 
+/**
+ * 4. 外部 LLM API 直呼び出し禁止検査（AGENTS.md §1 準拠）
+ * アプリから外部 LLM API を直接呼ばず、プロンプトコピー＆JSON取り込み方式を徹底する
+ */
+function verifyNoDirectLlmApi(): void {
+  console.log('--- 4. 外部 LLM API 直呼び出し禁止検査 ---');
+  const projectRoot = process.cwd();
+  const srcDir = path.resolve(projectRoot, 'src');
+
+  // 禁止する外部 LLM API エンドポイントおよび SDK パッケージ名
+  const forbiddenPatterns = [
+    { name: 'Gemini API Endpoint', regex: new RegExp(['generativelanguage', 'googleapis', 'com'].join('.')) },
+    { name: 'OpenAI API Endpoint', regex: new RegExp(['api', 'openai', 'com'].join('.')) },
+    { name: 'Anthropic API Endpoint', regex: new RegExp(['api', 'anthropic', 'com'].join('.')) },
+    { name: 'Google Generative AI SDK', regex: new RegExp('@' + 'google/generative-ai') },
+    { name: 'Google GenAI SDK', regex: new RegExp('@' + 'google/genai') },
+    { name: 'Anthropic SDK', regex: new RegExp('@' + 'anthropic-ai') },
+  ];
+
+  const foundErrors: string[] = [];
+
+  function scan(currentDir: string): void {
+    if (!fs.existsSync(currentDir)) return;
+    const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        scan(fullPath);
+      } else if (entry.isFile() && /\.(ts|tsx|js|jsx)$/.test(entry.name)) {
+        const content = fs.readFileSync(fullPath, 'utf8');
+        const lines = content.split('\n');
+        lines.forEach((line, index) => {
+          for (const pattern of forbiddenPatterns) {
+            if (pattern.regex.test(line)) {
+              foundErrors.push(`${fullPath}:${index + 1} に外部 LLM API の直接参照 '${pattern.name}' が含まれています: ${line.trim()}`);
+            }
+          }
+        });
+      }
+    }
+  }
+
+  scan(srcDir);
+
+  if (foundErrors.length > 0) {
+    console.error('外部 LLM API の直接呼び出し・SDK 参照が検出されました（アプリからの直接呼び出しは禁止です）:');
+    foundErrors.forEach((err) => console.error(`  - ${err}`));
+    throw new Error(`[verify:data] 外部 LLM API 直呼び出しが ${foundErrors.length} 箇所で検出されました`);
+  }
+
+  console.log('✓ 外部 LLM API 直呼び出し禁止検査完了: 直接呼び出し・SDK 参照なし');
+}
+
 function main(): void {
   try {
     verifySampleData();
     verifyNoForbiddenComments();
     verifyNoRealPhotosOrData();
+    verifyNoDirectLlmApi();
     console.log('\n[verify:data] 全ての検証に成功しました (exit 0)');
     process.exit(0);
   } catch (error) {

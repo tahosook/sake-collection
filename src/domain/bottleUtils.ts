@@ -1,5 +1,16 @@
-import { BottleRecord, BottleRecordBase, BottleStatus, SakeCategory, CategoryAttributesMap, PurchaseInfo } from '../types/sake';
+import {
+  BottleRecord,
+  BottleRecordBase,
+  BottleStatus,
+  SakeCategory,
+  CategoryAttributesMap,
+  PurchaseInfo,
+  SakeDescription,
+  DescriptionSource,
+  ReferencePriceInfo,
+} from '../types/sake';
 import { isValidCalendarDate } from './validation';
+import { generateGroupKey, normalizeSakeName } from './sortAndGroup';
 
 /**
  * 現在の日付文字列を YYYY-MM-DD 形式で取得する (ローカル暦日基準)
@@ -137,6 +148,12 @@ export interface CreateBottleInput<C extends SakeCategory = SakeCategory> {
   purchaseInfo?: Partial<PurchaseInfo>;
   tastingNote?: string;
   wantToBuyAgain?: boolean;
+  description?: SakeDescription | null;
+  sources?: DescriptionSource[];
+  referencePrice?: ReferencePriceInfo | null;
+  photoIds?: string[];
+  primaryPhotoId?: string | null;
+  userEditedFields?: string[];
 }
 
 /**
@@ -176,6 +193,14 @@ export function createNewBottle<C extends SakeCategory>(
 
   const emptyAttrs = {} as CategoryAttributesMap[C];
 
+  const photoIds = input.photoIds ? [...input.photoIds] : [];
+  let primaryPhotoId: string | null = input.primaryPhotoId ?? null;
+  if (!primaryPhotoId && photoIds.length > 0) {
+    primaryPhotoId = photoIds[0] ?? null;
+  } else if (primaryPhotoId && !photoIds.includes(primaryPhotoId)) {
+    primaryPhotoId = photoIds[0] ?? null;
+  }
+
   const record: BottleRecordBase<C> = {
     id,
     createdAt: nowIso,
@@ -192,14 +217,218 @@ export function createNewBottle<C extends SakeCategory>(
     disposedDate,
     tastingNote: input.tastingNote ?? '',
     wantToBuyAgain: input.wantToBuyAgain ?? false,
-    description: null,
-    sources: [],
+    description: input.description ?? null,
+    sources: input.sources ? [...input.sources] : [],
     purchaseInfo,
-    referencePrice: null,
-    photoIds: [],
-    primaryPhotoId: null,
-    userEditedFields: [],
+    referencePrice: input.referencePrice ?? null,
+    photoIds,
+    primaryPhotoId,
+    userEditedFields: input.userEditedFields ? [...input.userEditedFields] : [],
   };
 
   return record as unknown as BottleRecord<C>;
+}
+
+/**
+ * 重複銘柄検出の結果型
+ */
+export interface DuplicateDetectionResult {
+  hasDuplicate: boolean;
+  exactMatches: BottleRecord[];
+  nameMatches: BottleRecord[];
+  breakdown: {
+    inventory: number; // 家にある酒 (unopened / opened)
+    finished: number;  // 飲んだ記録
+    disposed: number;  // 手放した酒
+  };
+}
+
+/**
+ * 既存ボトル一覧から同一銘柄の重複を検出する純粋関数
+ */
+export function findDuplicateBottles(
+  bottles: BottleRecord[],
+  target: {
+    name: string;
+    category: SakeCategory;
+    volumeMl?: number | null;
+    vintageYear?: number | null;
+  }
+): DuplicateDetectionResult {
+  const normTargetName = normalizeSakeName(target.name);
+  if (!normTargetName) {
+    return {
+      hasDuplicate: false,
+      exactMatches: [],
+      nameMatches: [],
+      breakdown: { inventory: 0, finished: 0, disposed: 0 },
+    };
+  }
+
+  const validBottles = bottles.filter((b) => !b.deleted);
+  const exactMatches: BottleRecord[] = [];
+  const nameMatches: BottleRecord[] = [];
+
+  // 仮想的な target ボトルを作成して groupKey を取得
+  const dummyTargetBottle: BottleRecord = {
+    name: target.name,
+    category: target.category,
+    volumeMl: target.volumeMl ?? null,
+    categoryAttributes: (target.category === 'ワイン'
+      ? { vintageYear: target.vintageYear ?? null }
+      : {}) as BottleRecord['categoryAttributes'],
+  } as BottleRecord;
+  const targetGroupKey = generateGroupKey(dummyTargetBottle);
+
+  for (const b of validBottles) {
+    const isSameCategory = b.category === target.category;
+    const isSameName = normalizeSakeName(b.name) === normTargetName;
+
+    if (isSameCategory && isSameName) {
+      nameMatches.push(b);
+      if (generateGroupKey(b) === targetGroupKey) {
+        exactMatches.push(b);
+      }
+    }
+  }
+
+  // 検出対象ボトルのユニーク集合から状態内訳を集計
+  const matchedBottles = nameMatches;
+  let inventory = 0;
+  let finished = 0;
+  let disposed = 0;
+
+  for (const b of matchedBottles) {
+    if (b.status === 'unopened' || b.status === 'opened') {
+      inventory++;
+    } else if (b.status === 'finished') {
+      finished++;
+    } else if (b.status === 'disposed') {
+      disposed++;
+    }
+  }
+
+  return {
+    hasDuplicate: matchedBottles.length > 0,
+    exactMatches,
+    nameMatches,
+    breakdown: {
+      inventory,
+      finished,
+      disposed,
+    },
+  };
+}
+
+/**
+ * 既存ボトルから2本目以降の流用登録用ドラフトを生成する純粋関数
+ */
+export function createReuseDraftFromBottle<C extends SakeCategory = SakeCategory>(
+  source: BottleRecord<C>,
+  options: { copyPhotos?: boolean } = {}
+): CreateBottleInput<C> {
+  const copyPhotos = options.copyPhotos ?? true;
+
+  return {
+    name: source.name,
+    category: source.category as C,
+    status: 'unopened', // 既定は未開封にリセット
+    abv: source.abv,
+    volumeMl: source.volumeMl,
+    categoryAttributes: { ...source.categoryAttributes } as CategoryAttributesMap[C],
+    openedDate: null,
+    finishedDate: null,
+    disposedDate: null,
+    purchaseInfo: {
+      purchaseDate: null,
+      purchasePlace: '',
+      purchasePriceYen: null,
+    },
+    tastingNote: '',
+    wantToBuyAgain: false,
+    description: source.description ? { ...source.description } : null,
+    sources: source.sources ? source.sources.map((s) => ({ ...s })) : [],
+    referencePrice: source.referencePrice ? { ...source.referencePrice } : null,
+    photoIds: copyPhotos ? [...source.photoIds] : [],
+    primaryPhotoId: copyPhotos ? source.primaryPhotoId : null,
+    userEditedFields: [],
+  };
+}
+
+/**
+ * 複数本一括登録（および写真の個別複製対応）の生成結果
+ */
+export interface BatchCreateResult<C extends SakeCategory = SakeCategory> {
+  bottles: BottleRecord<C>[];
+  photosToClone: Array<{
+    sourcePhotoId: string;
+    newPhotoId: string;
+    bottleId: string;
+  }>;
+}
+
+/**
+ * 同内容で指定本数（1〜10本）のボトルレコード群を生成する純粋関数
+ * 1本ごとに独立した UUID を付与し、写真がある場合は各ボトル用に新しい PhotoRecord ID を割り振る
+ */
+export function createBottlesBatch<C extends SakeCategory>(
+  input: CreateBottleInput<C>,
+  count: number,
+  options: { nowIso?: string } = {}
+): BatchCreateResult<C> {
+  const safeCount = Math.max(1, Math.min(10, Math.floor(count)));
+  const nowIso = options.nowIso ?? new Date().toISOString();
+  const bottles: BottleRecord<C>[] = [];
+  const photosToClone: Array<{
+    sourcePhotoId: string;
+    newPhotoId: string;
+    bottleId: string;
+  }> = [];
+
+  const sourcePhotoIds = input.photoIds ?? [];
+  const sourcePrimaryId = input.primaryPhotoId ?? (sourcePhotoIds[0] ?? null);
+
+  for (let i = 0; i < safeCount; i++) {
+    const bottleId = crypto.randomUUID();
+
+    // 各ボトル固有の写真 ID マッピングを生成
+    const newPhotoIds: string[] = [];
+    let newPrimaryPhotoId: string | null = null;
+
+    for (const srcPid of sourcePhotoIds) {
+      const newPid = crypto.randomUUID();
+      newPhotoIds.push(newPid);
+      photosToClone.push({
+        sourcePhotoId: srcPid,
+        newPhotoId: newPid,
+        bottleId,
+      });
+
+      if (srcPid === sourcePrimaryId) {
+        newPrimaryPhotoId = newPid;
+      }
+    }
+
+    if (!newPrimaryPhotoId && newPhotoIds.length > 0) {
+      newPrimaryPhotoId = newPhotoIds[0] ?? null;
+    }
+
+    const bottleInput: CreateBottleInput<C> = {
+      ...input,
+      photoIds: newPhotoIds,
+      primaryPhotoId: newPrimaryPhotoId,
+    };
+
+    const record = createNewBottle(bottleInput, {
+      nowIso,
+      id: bottleId,
+    });
+
+    bottles.push(record);
+  }
+
+  return {
+    bottles,
+    photosToClone,
+  };
 }
