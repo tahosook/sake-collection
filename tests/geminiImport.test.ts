@@ -324,17 +324,64 @@ describe('Gemini 相談・取り込み・ドメインロジックテスト (PR #
       expect(merged.referencePrice?.estimatedPriceYen).toBe(4000);
     });
 
-    it('userEditedFields に指定されていても現在値が空の場合は Gemini の値で補完されること', () => {
-      const bottleWithEmptyName = { ...existingBottle, name: '' };
+    it('userEditedFields に指定されている項目は現在値が空（空文字や null）でも保護され Gemini の値で上書きされないこと', () => {
+      const bottleWithEmptyFields = {
+        ...existingBottle,
+        name: '',
+        abv: null,
+        volumeMl: null,
+      };
       const { merged, skippedFields } = mergeGeminiPayloadIntoBottle(
-        bottleWithEmptyName,
+        bottleWithEmptyFields,
         geminiPayload,
-        ['name']
+        ['name', 'abv', 'volumeMl']
       );
 
-      // 空欄だったので補完される
-      expect(merged.name).toBe('AIが推定した銘柄名');
-      expect(skippedFields).not.toContain('name');
+      // 空欄であっても手動編集項目なので保護される
+      expect(merged.name).toBe('');
+      expect(merged.abv).toBeNull();
+      expect(merged.volumeMl).toBeNull();
+      expect(skippedFields).toContain('name');
+      expect(skippedFields).toContain('abv');
+      expect(skippedFields).toContain('volumeMl');
+    });
+
+    it('未編集項目で Gemini の取り込み結果が null の場合、マージ結果も null / 空になり以前の値が残らないこと', () => {
+      const bottleWithValues = {
+        ...existingBottle,
+        abv: 15.0,
+        volumeMl: 720,
+        referencePrice: {
+          estimatedPriceYen: 3500,
+          fetchedDate: '2026-11-01',
+        },
+      };
+
+      const payloadWithNulls: GeminiImportPayload = {
+        name: '銘柄名のみ判明した酒',
+        category: '日本酒',
+        abv: null,
+        volumeMl: null,
+        categoryAttributes: {},
+        description: null,
+        sources: [],
+        referencePrice: null,
+      };
+
+      // 手編集項目なし
+      const { merged, skippedFields } = mergeGeminiPayloadIntoBottle(
+        bottleWithValues,
+        payloadWithNulls,
+        []
+      );
+
+      expect(merged.name).toBe('銘柄名のみ判明した酒');
+      expect(merged.abv).toBeNull();
+      expect(merged.volumeMl).toBeNull();
+      expect(merged.referencePrice).toBeNull();
+      expect(merged.description).toBeNull();
+      expect(merged.sources).toEqual([]);
+      expect(skippedFields).toHaveLength(0);
     });
 
     it('種類（category）が変更された場合、旧種類の属性は引き継がれず新種類の属性のみになること', () => {

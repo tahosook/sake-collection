@@ -1,8 +1,13 @@
 import React, { useState } from 'react';
 import { useCollection } from './storage/useCollection';
-import { BottleRecord, SakeCategory, BottleStatus } from './types/sake';
+import { BottleRecord, PhotoRecord, SakeCategory, BottleStatus } from './types/sake';
 import { BottleGroup, groupBottlesForDisplay } from './domain/sortAndGroup';
 import { filterBottles } from './domain/searchAndFilter';
+import {
+  createNewBottle,
+  createBottlesBatch,
+  CreateBottleInput,
+} from './domain/bottleUtils';
 import { Navigation, TabKey } from './components/Navigation';
 import { SearchBar } from './components/SearchBar';
 import { BottleGrid } from './components/BottleGrid';
@@ -19,8 +24,9 @@ export const App: React.FC = () => {
     photos,
     isLoading,
     error,
-    addBottle,
     updateBottle,
+    saveBottleAndPhotos,
+    saveBottlesBatch,
     changeBottleStatus,
     deleteBottle,
     exportBackup,
@@ -122,26 +128,62 @@ export const App: React.FC = () => {
     setIsFormModalOpen(true);
   };
 
-  // フォーム送信ハンドラー（新規または更新）
-  const handleFormSubmit = async (data: Parameters<typeof addBottle>[0] | BottleRecord) => {
+  // フォーム送信ハンドラー（新規または更新、複数本一括・写真対応）
+  const handleFormSubmit = async (
+    data: CreateBottleInput | BottleRecord,
+    options?: {
+      quantity?: number;
+      draftPhotos?: PhotoRecord[];
+    }
+  ) => {
+    const draftPhotos = options?.draftPhotos ?? [];
+    const quantity = options?.quantity ?? 1;
+
     if ('id' in data) {
-      await updateBottle(data);
+      // 既存ボトルの更新
+      await saveBottleAndPhotos(data, draftPhotos);
       if (selectedBottleForDetail?.id === data.id) {
         setSelectedBottleForDetail(data);
       }
     } else {
-      const created = await addBottle(data);
-      // 登録したお酒のステータスに応じた一覧画面へ切り替え
-      if (created.status === 'finished') {
-        setActiveTab('finished');
-        setHistorySubTab('finished');
-      } else if (created.status === 'disposed') {
-        setActiveTab('finished');
-        setHistorySubTab('disposed');
+      // 新規登録
+      if (quantity > 1) {
+        // 複数本一括登録
+        const batch = createBottlesBatch(data, quantity);
+        await saveBottlesBatch(batch.bottles, draftPhotos, batch.photosToClone);
+
+        // 状態に応じた一覧画面へ切り替え (PR #5 規則)
+        const firstBottle = batch.bottles[0];
+        if (firstBottle) {
+          if (firstBottle.status === 'finished') {
+            setActiveTab('finished');
+            setHistorySubTab('finished');
+          } else if (firstBottle.status === 'disposed') {
+            setActiveTab('finished');
+            setHistorySubTab('disposed');
+          } else {
+            setActiveTab('inventory');
+          }
+          setSelectedBottleForDetail(firstBottle);
+        }
       } else {
-        setActiveTab('inventory');
+        // 1本登録
+        const newBottle = createNewBottle(data);
+        const syncedPhotos = draftPhotos.map((p) => ({ ...p, bottleId: newBottle.id }));
+        await saveBottleAndPhotos(newBottle, syncedPhotos);
+
+        // 状態に応じた一覧画面へ切り替え (PR #5 規則)
+        if (newBottle.status === 'finished') {
+          setActiveTab('finished');
+          setHistorySubTab('finished');
+        } else if (newBottle.status === 'disposed') {
+          setActiveTab('finished');
+          setHistorySubTab('disposed');
+        } else {
+          setActiveTab('inventory');
+        }
+        setSelectedBottleForDetail(newBottle);
       }
-      setSelectedBottleForDetail(created);
     }
   };
 
@@ -342,6 +384,8 @@ export const App: React.FC = () => {
         <BottleFormModal
           key={editingBottle ? `edit-${editingBottle.id}` : 'create'}
           initialBottle={editingBottle}
+          allBottles={allBottles}
+          photos={photos}
           isOpen={isFormModalOpen}
           onClose={() => {
             setIsFormModalOpen(false);

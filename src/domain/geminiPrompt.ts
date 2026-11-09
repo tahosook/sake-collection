@@ -418,34 +418,32 @@ export function mergeGeminiPayloadIntoBottle<T extends CreateBottleInput | Bottl
   const editedSet = new Set(userEditedFields);
   const skippedFields: string[] = [];
 
-  const shouldOverwrite = (fieldKey: string, currentValue: unknown): boolean => {
+  const shouldOverwrite = (fieldKey: string): boolean => {
     if (editedSet.has(fieldKey)) {
-      // ユーザーが手編集した項目で、現在値が空でない場合は保護する
-      if (currentValue !== null && currentValue !== undefined && currentValue !== '') {
-        skippedFields.push(fieldKey);
-        return false;
-      }
+      // ユーザーが手動編集した項目は、現在値の有無（空欄・null）にかかわらず保護する
+      skippedFields.push(fieldKey);
+      return false;
     }
     return true;
   };
 
   // 1. name
-  const name = shouldOverwrite('name', current.name)
+  const name = shouldOverwrite('name')
     ? payload.name
     : current.name;
 
   // 2. category
-  const category = shouldOverwrite('category', current.category)
+  const category = shouldOverwrite('category')
     ? payload.category
     : current.category;
 
   // 3. abv
-  const abv = shouldOverwrite('abv', current.abv)
+  const abv = shouldOverwrite('abv')
     ? payload.abv
     : current.abv;
 
   // 4. volumeMl
-  const volumeMl = shouldOverwrite('volumeMl', current.volumeMl)
+  const volumeMl = shouldOverwrite('volumeMl')
     ? payload.volumeMl
     : current.volumeMl;
 
@@ -456,45 +454,55 @@ export function mergeGeminiPayloadIntoBottle<T extends CreateBottleInput | Bottl
 
   if (category === payload.category) {
     for (const [key, val] of Object.entries(payload.categoryAttributes)) {
-      if (val === null) continue;
       if (isCategoryChanged) {
-        // 種類変更時は新種類の属性をそのまま採用
-        mergedAttrs[key] = val;
+        if (val !== null) {
+          mergedAttrs[key] = val;
+        }
       } else {
         const fieldKey = `categoryAttributes.${key}`;
-        if (shouldOverwrite(fieldKey, currentAttrs[key])) {
-          mergedAttrs[key] = val;
+        if (shouldOverwrite(fieldKey)) {
+          if (val !== null) {
+            mergedAttrs[key] = val;
+          } else {
+            delete mergedAttrs[key];
+          }
         }
       }
     }
   }
 
   // 6. description
-  let mergedDescription: SakeDescription | null = current.description ?? null;
-  if (payload.description) {
-    const currentDesc = current.description ?? {
-      summary: '',
-      tasteProfile: '',
-      background: '',
-      servingSuggestion: '',
-    };
+  let mergedDescription: SakeDescription | null = null;
+  const currentDesc = current.description ?? {
+    summary: '',
+    tasteProfile: '',
+    background: '',
+    servingSuggestion: '',
+  };
+  const payloadDesc = payload.description ?? {
+    summary: '',
+    tasteProfile: '',
+    background: '',
+    servingSuggestion: '',
+  };
 
-    const summary = shouldOverwrite('description.summary', currentDesc.summary)
-      ? payload.description.summary
-      : currentDesc.summary;
+  const summary = shouldOverwrite('description.summary')
+    ? payloadDesc.summary
+    : currentDesc.summary;
 
-    const tasteProfile = shouldOverwrite('description.tasteProfile', currentDesc.tasteProfile)
-      ? payload.description.tasteProfile
-      : currentDesc.tasteProfile;
+  const tasteProfile = shouldOverwrite('description.tasteProfile')
+    ? payloadDesc.tasteProfile
+    : currentDesc.tasteProfile;
 
-    const background = shouldOverwrite('description.background', currentDesc.background)
-      ? payload.description.background
-      : currentDesc.background;
+  const background = shouldOverwrite('description.background')
+    ? payloadDesc.background
+    : currentDesc.background;
 
-    const servingSuggestion = shouldOverwrite('description.servingSuggestion', currentDesc.servingSuggestion)
-      ? payload.description.servingSuggestion
-      : currentDesc.servingSuggestion;
+  const servingSuggestion = shouldOverwrite('description.servingSuggestion')
+    ? payloadDesc.servingSuggestion
+    : currentDesc.servingSuggestion;
 
+  if (summary || tasteProfile || background || servingSuggestion) {
     mergedDescription = {
       summary,
       tasteProfile,
@@ -504,19 +512,19 @@ export function mergeGeminiPayloadIntoBottle<T extends CreateBottleInput | Bottl
   }
 
   // 7. sources
-  let mergedSources: DescriptionSource[] = current.sources ? [...current.sources] : [];
-  if (shouldOverwrite('sources', current.sources?.length ? current.sources : null)) {
-    if (payload.sources.length > 0) {
-      mergedSources = payload.sources;
-    }
+  let mergedSources: DescriptionSource[] = [];
+  if (shouldOverwrite('sources')) {
+    mergedSources = payload.sources ? [...payload.sources] : [];
+  } else {
+    mergedSources = current.sources ? [...current.sources] : [];
   }
 
   // 8. referencePrice（購入価格 purchasePriceYen とは完全に別フィールド）
-  let mergedReferencePrice: ReferencePriceInfo | null = current.referencePrice ?? null;
-  if (shouldOverwrite('referencePrice', current.referencePrice?.estimatedPriceYen)) {
-    if (payload.referencePrice) {
-      mergedReferencePrice = payload.referencePrice;
-    }
+  let mergedReferencePrice: ReferencePriceInfo | null = null;
+  if (shouldOverwrite('referencePrice')) {
+    mergedReferencePrice = payload.referencePrice ? { ...payload.referencePrice } : null;
+  } else {
+    mergedReferencePrice = current.referencePrice ? { ...current.referencePrice } : null;
   }
 
   const merged = {

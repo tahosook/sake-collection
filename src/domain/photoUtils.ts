@@ -70,9 +70,7 @@ export async function computeDataUrlHashAndSize(
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     contentHash = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('').toLowerCase();
   } else {
-    // Node.js フォールバック
-    const nodeCrypto = await import('node:crypto');
-    contentHash = nodeCrypto.createHash('sha256').update(bytes).digest('hex').toLowerCase();
+    throw new Error('Web Crypto API (crypto.subtle.digest) が利用できません');
   }
 
   return {
