@@ -359,11 +359,99 @@ function verifyNoRealPhotosOrData(): void {
   console.log('✓ 許可外JSON・画像ファイル混入防止検査完了: 混入ファイルなし (ホワイトリスト準拠)');
 }
 
+/**
+ * 4. 外部 LLM API 直呼び出し禁止検査（AGENTS.md §1 準拠）
+ * アプリから外部 LLM API を直接呼ばず、プロンプトコピー＆JSON取り込み方式を徹底する
+ * ファイル全体および package.json の依存関係を検査
+ */
+function verifyNoDirectLlmApi(): void {
+  console.log('--- 4. 外部 LLM API 直呼び出し禁止検査 ---');
+  const projectRoot = process.cwd();
+  const srcDir = path.resolve(projectRoot, 'src');
+
+  // 禁止する外部 LLM API エンドポイントおよび SDK パッケージ名
+  const forbiddenPatterns = [
+    { name: 'Gemini API Endpoint', regex: new RegExp(['generativelanguage', 'googleapis', 'com'].join('.')) },
+    { name: 'OpenAI API Endpoint', regex: new RegExp(['api', 'openai', 'com'].join('.')) },
+    { name: 'Anthropic API Endpoint', regex: new RegExp(['api', 'anthropic', 'com'].join('.')) },
+    { name: 'Google Generative AI SDK', regex: new RegExp('@' + 'google/generative-ai') },
+    { name: 'Google GenAI SDK', regex: new RegExp('@' + 'google/genai') },
+    { name: 'Anthropic SDK', regex: new RegExp('@' + 'anthropic-ai') },
+  ];
+
+  const forbiddenPackages = [
+    '@' + 'google/generative-ai',
+    '@' + 'google/genai',
+    'openai',
+    '@' + 'anthropic-ai/sdk',
+    '@' + 'anthropic-ai',
+  ];
+
+  const foundErrors: string[] = [];
+
+  // A. src/ 配下のファイル全体に対する正規表現検査
+  function scan(currentDir: string): void {
+    if (!fs.existsSync(currentDir)) return;
+    const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        scan(fullPath);
+      } else if (entry.isFile() && /\.(ts|tsx|js|jsx)$/.test(entry.name)) {
+        const content = fs.readFileSync(fullPath, 'utf8');
+        for (const pattern of forbiddenPatterns) {
+          if (pattern.regex.test(content)) {
+            // 行番号も特定してわかりやすく報告
+            const lines = content.split('\n');
+            const matchingLineIdx = lines.findIndex((l) => pattern.regex.test(l));
+            const lineInfo = matchingLineIdx !== -1 ? `:${matchingLineIdx + 1}` : '';
+            foundErrors.push(`${fullPath}${lineInfo} に外部 LLM API の直接参照 '${pattern.name}' が含まれています`);
+          }
+        }
+      }
+    }
+  }
+
+  scan(srcDir);
+
+  // B. package.json の依存関係検査
+  const packageJsonPath = path.resolve(projectRoot, 'package.json');
+  if (fs.existsSync(packageJsonPath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8')) as Record<string, unknown>;
+      const depSections = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'];
+      for (const section of depSections) {
+        if (typeof pkg[section] === 'object' && pkg[section] !== null) {
+          const deps = Object.keys(pkg[section] as Record<string, unknown>);
+          for (const dep of deps) {
+            for (const forbiddenPkg of forbiddenPackages) {
+              if (dep === forbiddenPkg || dep.startsWith(forbiddenPkg + '/')) {
+                foundErrors.push(`package.json の ${section} に禁止対象の LLM SDK '${dep}' が含まれています`);
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      foundErrors.push(`package.json の読み込み・構文解析に失敗しました: ${String(err)}`);
+    }
+  }
+
+  if (foundErrors.length > 0) {
+    console.error('外部 LLM API の直接呼び出し・SDK 参照が検出されました（アプリからの直接呼び出しは禁止です）:');
+    foundErrors.forEach((err) => console.error(`  - ${err}`));
+    throw new Error(`[verify:data] 外部 LLM API 直呼び出しが ${foundErrors.length} 箇所で検出されました`);
+  }
+
+  console.log('✓ 外部 LLM API 直呼び出し禁止検査完了: 直接呼び出し・SDK 参照なし (ファイル全体および依存関係)');
+}
+
 function main(): void {
   try {
     verifySampleData();
     verifyNoForbiddenComments();
     verifyNoRealPhotosOrData();
+    verifyNoDirectLlmApi();
     console.log('\n[verify:data] 全ての検証に成功しました (exit 0)');
     process.exit(0);
   } catch (error) {
