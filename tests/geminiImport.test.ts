@@ -168,6 +168,31 @@ describe('Gemini 相談・取り込み・ドメインロジックテスト (PR #
       }
     });
 
+    it('容量が正の小数であっても四捨五入後に1未満（0）になる場合はエラーとなり、1以上なら正の整数に丸められること', () => {
+      const nearZeroVolume = JSON.stringify({
+        name: '微小容量酒',
+        category: 'その他',
+        volumeMl: 0.4,
+      });
+      const res = parseAndValidateGeminiJson(nearZeroVolume);
+      expect(res.success).toBe(false);
+      if (!res.success) {
+        expect(res.errors.some((e) => e.includes('容量（volumeMl）は正の数値または null'))).toBe(true);
+      }
+
+      // 0.5 以上の場合は 1 に丸められて受理されること
+      const validSmallVolume = JSON.stringify({
+        name: '最小容量酒',
+        category: 'その他',
+        volumeMl: 0.6,
+      });
+      const resValid = parseAndValidateGeminiJson(validSmallVolume);
+      expect(resValid.success).toBe(true);
+      if (resValid.success) {
+        expect(resValid.data.volumeMl).toBe(1);
+      }
+    });
+
     it('種類に未定義の属性キーは除外され警告が出ること', () => {
       const unknownAttrs = JSON.stringify({
         name: '純米酒',

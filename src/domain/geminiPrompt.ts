@@ -252,12 +252,17 @@ export function parseAndValidateGeminiJson(
     errors.push('度数（abv）は 0〜100 の数値または null である必要があります。');
   }
 
-  // 5. 数値項目: volumeMl (容量) - 正の数値型または null のみ受理（暗黙変換・文字列・真偽値は拒否）
+  // 5. 数値項目: volumeMl (容量) - 正の数値型または null のみ受理（暗黙変換・文字列・真偽値は拒否、丸め後が1未満の場合も拒否）
   let volumeMl: number | null = null;
   if (obj['volumeMl'] === undefined || obj['volumeMl'] === null) {
     volumeMl = null;
   } else if (typeof obj['volumeMl'] === 'number' && !isNaN(obj['volumeMl']) && obj['volumeMl'] > 0) {
-    volumeMl = Math.round(obj['volumeMl']);
+    const rounded = Math.round(obj['volumeMl']);
+    if (rounded < 1) {
+      errors.push('容量（volumeMl）は正の数値または null である必要があります。');
+    } else {
+      volumeMl = rounded;
+    }
   } else {
     errors.push('容量（volumeMl）は正の数値または null である必要があります。');
   }
