@@ -1,6 +1,6 @@
 import React from 'react';
 import { SAKE_CATEGORIES, SakeCategory, BottleStatus } from '../types/sake';
-import { SearchIcon, CloseIcon } from './Icons';
+import { SearchIcon, CloseIcon, HeartIcon } from './Icons';
 
 export interface SearchBarProps {
   searchQuery: string;
@@ -10,6 +10,9 @@ export interface SearchBarProps {
   selectedStatus?: BottleStatus | 'all';
   onStatusChange?: (status: BottleStatus | 'all') => void;
   showStatusFilter?: boolean;
+  showWantToBuyAgainFilter?: boolean;
+  wantToBuyAgainOnly?: boolean;
+  onToggleWantToBuyAgain?: () => void;
 }
 
 export const SearchBar: React.FC<SearchBarProps> = ({
@@ -20,6 +23,9 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   selectedStatus = 'all',
   onStatusChange,
   showStatusFilter = false,
+  showWantToBuyAgainFilter = false,
+  wantToBuyAgainOnly = false,
+  onToggleWantToBuyAgain,
 }) => {
   return (
     <div className="space-y-2.5">
@@ -82,6 +88,28 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             }`}
           >
             未開封のみ
+          </button>
+        </div>
+      )}
+
+      {/* 「また買いたい」絞り込みトグル（飲んだ記録でのみ表示） */}
+      {showWantToBuyAgainFilter && onToggleWantToBuyAgain && (
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onToggleWantToBuyAgain}
+            aria-pressed={wantToBuyAgainOnly}
+            className={`min-h-touch px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 select-none ${
+              wantToBuyAgainOnly
+                ? 'bg-rose-600 text-white shadow-sm'
+                : 'bg-white text-stone-700 hover:bg-stone-100 border border-stone-300'
+            }`}
+          >
+            <HeartIcon
+              filled={wantToBuyAgainOnly}
+              className={`w-4 h-4 ${wantToBuyAgainOnly ? 'text-white' : 'text-rose-500'}`}
+            />
+            <span>また買いたいのみ</span>
           </button>
         </div>
       )}

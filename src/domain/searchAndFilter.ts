@@ -9,6 +9,8 @@ export interface FilterOptions {
   status?: StatusFilterOption;
   /** 検索キーワード (名前＋主要属性を部分一致検索) */
   query?: string;
+  /** 「また買いたい」の印がついたボトルのみに絞り込むか (既定は false) */
+  wantToBuyAgainOnly?: boolean;
   /** 論理削除されたレコードを含めるか (既定は false) */
   includeDeleted?: boolean;
 }
@@ -74,6 +76,7 @@ export function filterBottles(bottles: BottleRecord[], options: FilterOptions = 
     category = 'all',
     status = 'all',
     query = '',
+    wantToBuyAgainOnly = false,
     includeDeleted = false,
   } = options;
 
@@ -99,7 +102,12 @@ export function filterBottles(bottles: BottleRecord[], options: FilterOptions = 
       }
     }
 
-    // 4. キーワード検索
+    // 4. 「また買いたい」絞り込み
+    if (wantToBuyAgainOnly && !bottle.wantToBuyAgain) {
+      return false;
+    }
+
+    // 5. キーワード検索
     if (!matchesQuery(bottle, query)) {
       return false;
     }
