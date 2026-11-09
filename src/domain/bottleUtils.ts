@@ -321,15 +321,49 @@ export function findDuplicateBottles(
 }
 
 /**
+ * 既存ボトル流用ドラフト生成の結果型
+ */
+export interface CreateReuseDraftResult<C extends SakeCategory = SakeCategory> {
+  draft: CreateBottleInput<C>;
+  photosToClone: Array<{
+    sourcePhotoId: string;
+    newPhotoId: string;
+  }>;
+}
+
+/**
  * 既存ボトルから2本目以降の流用登録用ドラフトを生成する純粋関数
+ * 写真は流用元の ID を共有せず、新しい写真 ID（UUID）を割り当てて複製元との対応関係を返す
  */
 export function createReuseDraftFromBottle<C extends SakeCategory = SakeCategory>(
   source: BottleRecord<C>,
   options: { copyPhotos?: boolean } = {}
-): CreateBottleInput<C> {
+): CreateReuseDraftResult<C> {
   const copyPhotos = options.copyPhotos ?? true;
+  const newPhotoIds: string[] = [];
+  const photosToClone: Array<{ sourcePhotoId: string; newPhotoId: string }> = [];
+  let newPrimaryPhotoId: string | null = null;
 
-  return {
+  if (copyPhotos && source.photoIds.length > 0) {
+    for (const srcPid of source.photoIds) {
+      const newPid = crypto.randomUUID();
+      newPhotoIds.push(newPid);
+      photosToClone.push({
+        sourcePhotoId: srcPid,
+        newPhotoId: newPid,
+      });
+
+      if (srcPid === source.primaryPhotoId) {
+        newPrimaryPhotoId = newPid;
+      }
+    }
+
+    if (!newPrimaryPhotoId && newPhotoIds.length > 0) {
+      newPrimaryPhotoId = newPhotoIds[0] ?? null;
+    }
+  }
+
+  const draft: CreateBottleInput<C> = {
     name: source.name,
     category: source.category as C,
     status: 'unopened', // 既定は未開封にリセット
@@ -349,9 +383,14 @@ export function createReuseDraftFromBottle<C extends SakeCategory = SakeCategory
     description: source.description ? { ...source.description } : null,
     sources: source.sources ? source.sources.map((s) => ({ ...s })) : [],
     referencePrice: source.referencePrice ? { ...source.referencePrice } : null,
-    photoIds: copyPhotos ? [...source.photoIds] : [],
-    primaryPhotoId: copyPhotos ? source.primaryPhotoId : null,
+    photoIds: newPhotoIds,
+    primaryPhotoId: newPrimaryPhotoId,
     userEditedFields: [],
+  };
+
+  return {
+    draft,
+    photosToClone,
   };
 }
 

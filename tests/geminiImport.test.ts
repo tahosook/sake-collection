@@ -134,7 +134,7 @@ describe('Gemini 相談・取り込み・ドメインロジックテスト (PR #
       }
     });
 
-    it('度数や容量が不正な数値の場合はエラーとなること', () => {
+    it('度数や容量が不正な数値（範囲外・負数）の場合はエラーとなること', () => {
       const invalidNumbers = JSON.stringify({
         name: '不正数値酒',
         category: '焼酎',
@@ -146,6 +146,25 @@ describe('Gemini 相談・取り込み・ドメインロジックテスト (PR #
       if (!res.success) {
         expect(res.errors.some((e) => e.includes('度数（abv）'))).toBe(true);
         expect(res.errors.some((e) => e.includes('容量（volumeMl）'))).toBe(true);
+      }
+    });
+
+    it('度数・容量・相場目安に文字列や真偽値など数値型以外が渡された場合は暗黙変換せずエラーとなること', () => {
+      const stringNumbers = JSON.stringify({
+        name: '文字列数値酒',
+        category: '日本酒',
+        abv: "15.0", // 文字列
+        volumeMl: "720", // 文字列
+        referencePrice: {
+          estimatedPriceYen: true, // 真偽値
+        },
+      });
+      const res = parseAndValidateGeminiJson(stringNumbers);
+      expect(res.success).toBe(false);
+      if (!res.success) {
+        expect(res.errors.some((e) => e.includes('度数（abv）は 0〜100 の数値または null'))).toBe(true);
+        expect(res.errors.some((e) => e.includes('容量（volumeMl）は正の数値または null'))).toBe(true);
+        expect(res.errors.some((e) => e.includes('相場目安（estimatedPriceYen）は 0 以上の数値または null'))).toBe(true);
       }
     });
 
@@ -292,6 +311,48 @@ describe('Gemini 相談・取り込み・ドメインロジックテスト (PR #
       expect(merged.name).toBe('AIが推定した銘柄名');
       expect(skippedFields).not.toContain('name');
     });
+
+    it('種類（category）が変更された場合、旧種類の属性は引き継がれず新種類の属性のみになること', () => {
+      // 現在は日本酒（蔵元: 鳳凰酒造）
+      const nihonshuBottle = createNewBottle({
+        name: '謎のお酒',
+        category: '日本酒',
+        categoryAttributes: {
+          brewery: '鳳凰酒造',
+          specificName: '純米大吟醸',
+        },
+      });
+
+      // Gemini がウイスキーと判定した場合
+      const whiskyPayload: GeminiImportPayload = {
+        name: '山崎 12年',
+        category: 'ウイスキー',
+        abv: 43.0,
+        volumeMl: 700,
+        categoryAttributes: {
+          distillery: '山崎蒸溜所',
+          ageStatement: '12年',
+        },
+        description: null,
+        sources: [],
+        referencePrice: null,
+      };
+
+      // ユーザーが旧種類の属性（brewery）を編集していたとしても、種類が変われば旧属性はクリアされる
+      const { merged } = mergeGeminiPayloadIntoBottle(
+        nihonshuBottle,
+        whiskyPayload,
+        ['categoryAttributes.brewery']
+      );
+
+      expect(merged.category).toBe('ウイスキー');
+      const attrs = merged.categoryAttributes as Record<string, unknown>;
+      expect(attrs['distillery']).toBe('山崎蒸溜所');
+      expect(attrs['ageStatement']).toBe('12年');
+      // 日本酒の旧属性が残っていないこと
+      expect(attrs['brewery']).toBeUndefined();
+      expect(attrs['specificName']).toBeUndefined();
+    });
   });
 
   describe('findDuplicateBottles (重複検出)', () => {
@@ -337,8 +398,8 @@ describe('Gemini 相談・取り込み・ドメインロジックテスト (PR #
   describe('createReuseDraftFromBottle (既存銘柄からの流用)', () => {
     const sourceBottle = SAMPLE_BOTTLES[0]!;
 
-    it('属性・解説・相場目安を引き継ぎつつ、ステータスや購入情報が未開封・空欄にリセットされること', () => {
-      const draft = createReuseDraftFromBottle(sourceBottle, { copyPhotos: true });
+    it('属性・解説・相場目安を引き継ぎつつ、写真IDは共有せず新しいUUIDが採番され対応表が返ること', () => {
+      const { draft, photosToClone } = createReuseDraftFromBottle(sourceBottle, { copyPhotos: true });
 
       // 引き継がれる情報
       expect(draft.name).toBe(sourceBottle.name);
@@ -347,8 +408,18 @@ describe('Gemini 相談・取り込み・ドメインロジックテスト (PR #
       expect(draft.volumeMl).toBe(sourceBottle.volumeMl);
       expect(draft.categoryAttributes).toEqual(sourceBottle.categoryAttributes);
       expect(draft.description).toEqual(sourceBottle.description);
-      expect(draft.photoIds).toEqual(sourceBottle.photoIds);
-      expect(draft.primaryPhotoId).toBe(sourceBottle.primaryPhotoId);
+
+      // 写真 ID は流用元と同一ではなく、新しい UUID が割り当てられていること
+      expect(draft.photoIds).toHaveLength(sourceBottle.photoIds.length);
+      expect(draft.photoIds).not.toEqual(sourceBottle.photoIds);
+      expect(draft.primaryPhotoId).not.toBe(sourceBottle.primaryPhotoId);
+
+      // photosToClone に元写真と新写真の対応が含まれること
+      expect(photosToClone).toHaveLength(sourceBottle.photoIds.length);
+      for (let i = 0; i < photosToClone.length; i++) {
+        expect(photosToClone[i]?.sourcePhotoId).toBe(sourceBottle.photoIds[i]);
+        expect(photosToClone[i]?.newPhotoId).toBe(draft.photoIds?.[i]);
+      }
 
       // リセットされる情報
       expect(draft.status).toBe('unopened');
@@ -363,10 +434,11 @@ describe('Gemini 相談・取り込み・ドメインロジックテスト (PR #
       expect(draft.userEditedFields).toEqual([]);
     });
 
-    it('copyPhotos: false の場合は写真配列が空になること', () => {
-      const draft = createReuseDraftFromBottle(sourceBottle, { copyPhotos: false });
+    it('copyPhotos: false の場合は写真配列および photosToClone が空になること', () => {
+      const { draft, photosToClone } = createReuseDraftFromBottle(sourceBottle, { copyPhotos: false });
       expect(draft.photoIds).toEqual([]);
       expect(draft.primaryPhotoId).toBeNull();
+      expect(photosToClone).toEqual([]);
     });
   });
 

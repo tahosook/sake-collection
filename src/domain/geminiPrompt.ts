@@ -242,25 +242,36 @@ export function parseAndValidateGeminiJson(
   }
   const category = (isSakeCategory(obj['category']) ? obj['category'] : 'その他') as SakeCategory;
 
-  // 4. 数値項目: abv (度数)
+  // 4. 数値項目: abv (度数) - 数値型または null のみ受理（暗黙変換・文字列・真偽値は拒否）
   let abv: number | null = null;
-  if (obj['abv'] !== undefined && obj['abv'] !== null && obj['abv'] !== '') {
-    const numAbv = Number(obj['abv']);
-    if (isNaN(numAbv) || numAbv < 0 || numAbv > 100) {
-      errors.push('度数（abv）は 0〜100 の数値または null である必要があります。');
-    } else {
-      abv = numAbv;
-    }
+  if (obj['abv'] === undefined || obj['abv'] === null) {
+    abv = null;
+  } else if (typeof obj['abv'] === 'number' && !isNaN(obj['abv']) && obj['abv'] >= 0 && obj['abv'] <= 100) {
+    abv = obj['abv'];
+  } else {
+    errors.push('度数（abv）は 0〜100 の数値または null である必要があります。');
   }
 
-  // 5. 数値項目: volumeMl (容量)
+  // 5. 数値項目: volumeMl (容量) - 正の数値型または null のみ受理（暗黙変換・文字列・真偽値は拒否）
   let volumeMl: number | null = null;
-  if (obj['volumeMl'] !== undefined && obj['volumeMl'] !== null && obj['volumeMl'] !== '') {
-    const numVol = Number(obj['volumeMl']);
-    if (isNaN(numVol) || numVol <= 0) {
-      errors.push('容量（volumeMl）は正の数値または null である必要があります。');
+  if (obj['volumeMl'] === undefined || obj['volumeMl'] === null) {
+    volumeMl = null;
+  } else if (typeof obj['volumeMl'] === 'number' && !isNaN(obj['volumeMl']) && obj['volumeMl'] > 0) {
+    volumeMl = Math.round(obj['volumeMl']);
+  } else {
+    errors.push('容量（volumeMl）は正の数値または null である必要があります。');
+  }
+
+  // 6. 相場目安の予備チェック（基本数値型エラーを即座に検出するため）
+  let estPrice: number | null = null;
+  if (typeof obj['referencePrice'] === 'object' && obj['referencePrice'] !== null && !Array.isArray(obj['referencePrice'])) {
+    const r = obj['referencePrice'] as Record<string, unknown>;
+    if (r['estimatedPriceYen'] === undefined || r['estimatedPriceYen'] === null) {
+      estPrice = null;
+    } else if (typeof r['estimatedPriceYen'] === 'number' && !isNaN(r['estimatedPriceYen']) && r['estimatedPriceYen'] >= 0) {
+      estPrice = Math.round(r['estimatedPriceYen']);
     } else {
-      volumeMl = Math.round(numVol);
+      errors.push('相場目安（estimatedPriceYen）は 0 以上の数値または null である必要があります。');
     }
   }
 
@@ -347,16 +358,6 @@ export function parseAndValidateGeminiJson(
   let referencePrice: ReferencePriceInfo | null = null;
   if (typeof obj['referencePrice'] === 'object' && obj['referencePrice'] !== null && !Array.isArray(obj['referencePrice'])) {
     const r = obj['referencePrice'] as Record<string, unknown>;
-    let estPrice: number | null = null;
-
-    if (r['estimatedPriceYen'] !== undefined && r['estimatedPriceYen'] !== null && r['estimatedPriceYen'] !== '') {
-      const numPrice = Number(r['estimatedPriceYen']);
-      if (isNaN(numPrice) || numPrice < 0) {
-        warnings.push('相場目安価格が不正な数値だったため空欄にしました。');
-      } else {
-        estPrice = Math.round(numPrice);
-      }
-    }
 
     let fetchedDate: string | null = null;
     if (typeof r['fetchedDate'] === 'string' && isValidCalendarDate(r['fetchedDate'].trim())) {
@@ -443,15 +444,20 @@ export function mergeGeminiPayloadIntoBottle<T extends CreateBottleInput | Bottl
     ? payload.volumeMl
     : current.volumeMl;
 
-  // 5. categoryAttributes
+  // 5. categoryAttributes（種類変更時は旧属性を引き継がず、旧属性の編集保護フラグも無効化）
+  const isCategoryChanged = category !== current.category;
   const currentAttrs = (current.categoryAttributes ?? {}) as Record<string, unknown>;
-  const mergedAttrs: Record<string, unknown> = { ...currentAttrs };
+  const mergedAttrs: Record<string, unknown> = isCategoryChanged ? {} : { ...currentAttrs };
 
   if (category === payload.category) {
     for (const [key, val] of Object.entries(payload.categoryAttributes)) {
-      const fieldKey = `categoryAttributes.${key}`;
-      if (shouldOverwrite(fieldKey, currentAttrs[key])) {
-        if (val !== null) {
+      if (val === null) continue;
+      if (isCategoryChanged) {
+        // 種類変更時は新種類の属性をそのまま採用
+        mergedAttrs[key] = val;
+      } else {
+        const fieldKey = `categoryAttributes.${key}`;
+        if (shouldOverwrite(fieldKey, currentAttrs[key])) {
           mergedAttrs[key] = val;
         }
       }
