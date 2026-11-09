@@ -117,6 +117,31 @@ describe('bottleUtils ドメインロジックテスト', () => {
       expect(transitioned.disposedDate).toBe('2026-11-08');
       expect(transitioned.finishedDate).toBeNull();
     });
+
+    it('dateOverride に null を指定した場合、日付が null（空欄）のまま保存できること', () => {
+      const unopened = SAMPLE_BOTTLES.find((b) => b.status === 'unopened')!;
+
+      // opened で日付空欄
+      const openedWithNull = transitionBottleStatus(unopened, 'opened', {
+        dateOverride: null,
+      });
+      expect(openedWithNull.status).toBe('opened');
+      expect(openedWithNull.openedDate).toBeNull();
+
+      // finished で日付空欄
+      const finishedWithNull = transitionBottleStatus(unopened, 'finished', {
+        dateOverride: null,
+      });
+      expect(finishedWithNull.status).toBe('finished');
+      expect(finishedWithNull.finishedDate).toBeNull();
+
+      // disposed で日付空欄
+      const disposedWithNull = transitionBottleStatus(unopened, 'disposed', {
+        dateOverride: null,
+      });
+      expect(disposedWithNull.status).toBe('disposed');
+      expect(disposedWithNull.disposedDate).toBeNull();
+    });
   });
 
   describe('createNewBottle', () => {

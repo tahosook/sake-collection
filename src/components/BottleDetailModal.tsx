@@ -65,7 +65,10 @@ export const BottleDetailModal: React.FC<BottleDetailModalProps> = ({
   // 状態変更の確定処理
   const handleConfirmStatusChange = async () => {
     if (!selectedNewStatus) return;
-    const dateOverride = selectedNewStatus === 'unopened' ? null : (statusDateInput || getTodayDateString());
+    const dateOverride =
+      selectedNewStatus === 'unopened'
+        ? null
+        : statusDateInput.trim() || null;
     await onChangeStatus(bottle.id, selectedNewStatus, dateOverride);
     setIsChangingStatus(false);
     setSelectedNewStatus(null);
@@ -280,8 +283,14 @@ export const BottleDetailModal: React.FC<BottleDetailModalProps> = ({
                       type="button"
                       onClick={() => {
                         setSelectedNewStatus(st);
-                        if (st === 'opened' && !bottle.openedDate) {
-                          setStatusDateInput(getTodayDateString());
+                        if (st === 'opened') {
+                          setStatusDateInput(bottle.openedDate ?? getTodayDateString());
+                        } else if (st === 'finished') {
+                          setStatusDateInput(bottle.finishedDate ?? getTodayDateString());
+                        } else if (st === 'disposed') {
+                          setStatusDateInput(bottle.disposedDate ?? getTodayDateString());
+                        } else {
+                          setStatusDateInput('');
                         }
                       }}
                       className={`min-h-touch p-2.5 rounded-xl text-xs font-semibold border transition ${
@@ -299,10 +308,10 @@ export const BottleDetailModal: React.FC<BottleDetailModalProps> = ({
                   <div>
                     <label className="block text-xs font-medium text-stone-600 mb-1">
                       {selectedNewStatus === 'opened'
-                        ? '開封日:'
+                        ? '開封日（空欄可）:'
                         : selectedNewStatus === 'finished'
-                        ? '飲み切り日:'
-                        : '手放した日:'}
+                        ? '飲み切り日（空欄可）:'
+                        : '手放した日（空欄可）:'}
                     </label>
                     <input
                       type="date"

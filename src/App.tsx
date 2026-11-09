@@ -44,6 +44,7 @@ export const App: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedCategory, setSelectedCategory] = useState<SakeCategory | 'all'>('all');
   const [inventoryStatusFilter, setInventoryStatusFilter] = useState<BottleStatus | 'all'>('all');
+  const [wantToBuyAgainOnly, setWantToBuyAgainOnly] = useState<boolean>(false);
 
   // モーダル・シート状態
   const [selectedGroupForSheet, setSelectedGroupForSheet] = useState<BottleGroup | null>(null);
@@ -71,6 +72,7 @@ export const App: React.FC = () => {
   const filteredFinishedBottles = filterBottles(finishedBottles, {
     query: searchQuery,
     category: selectedCategory,
+    wantToBuyAgainOnly,
   });
 
   // (c) 手放した酒
@@ -253,6 +255,9 @@ export const App: React.FC = () => {
             selectedStatus={inventoryStatusFilter}
             onStatusChange={setInventoryStatusFilter}
             showStatusFilter={activeTab === 'inventory'}
+            showWantToBuyAgainFilter={activeTab === 'finished' && historySubTab === 'finished'}
+            wantToBuyAgainOnly={wantToBuyAgainOnly}
+            onToggleWantToBuyAgain={() => setWantToBuyAgainOnly((prev) => !prev)}
           />
         )}
 
@@ -319,7 +324,13 @@ export const App: React.FC = () => {
                     bottles={filteredFinishedBottles}
                     photos={photos}
                     onSelectBottle={setSelectedBottleForDetail}
-                    emptyMessage="飲み切ったお酒の記録はありません"
+                    emptyMessage={
+                      wantToBuyAgainOnly
+                        ? '「また買いたい」印のある飲んだ記録はありません'
+                        : searchQuery || selectedCategory !== 'all'
+                        ? '条件に一致するお酒がありません'
+                        : '飲み切ったお酒の記録はありません'
+                    }
                     type="finished"
                   />
                 ) : (

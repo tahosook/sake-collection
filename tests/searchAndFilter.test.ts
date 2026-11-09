@@ -123,6 +123,33 @@ describe('searchAndFilter ドメインロジックテスト', () => {
       expect(result[0]?.name).toBe('純米大吟醸 鳳凰');
       expect(result[0]?.status).toBe('opened');
     });
+
+    it('wantToBuyAgainOnly: true で「また買いたい」印のついたボトルのみ絞り込めること', () => {
+      const allAgain = filterBottles(SAMPLE_BOTTLES, { wantToBuyAgainOnly: true });
+      expect(allAgain.length).toBeGreaterThan(0);
+      for (const b of allAgain) {
+        expect(b.wantToBuyAgain).toBe(true);
+      }
+
+      // 飲んだ記録（finished）の中で「また買いたい」絞り込み
+      const finishedAgain = filterBottles(SAMPLE_BOTTLES, {
+        status: 'finished',
+        wantToBuyAgainOnly: true,
+      });
+      for (const b of finishedAgain) {
+        expect(b.status).toBe('finished');
+        expect(b.wantToBuyAgain).toBe(true);
+      }
+
+      // 該当なし条件（存在しない種類と「また買いたい」の組み合わせ）
+      const noneAgain = filterBottles(SAMPLE_BOTTLES, {
+        category: 'シェリー',
+        wantToBuyAgainOnly: true,
+      });
+      // SAMPLE_BOTTLES にシェリーで wantToBuyAgain === true のものがあるか確認し、ない場合は 0 件
+      const expectedSherryAgain = SAMPLE_BOTTLES.filter((b) => b.category === 'シェリー' && b.wantToBuyAgain);
+      expect(noneAgain).toHaveLength(expectedSherryAgain.length);
+    });
   });
 
   describe('searchAcrossCollections (横断検索)', () => {
