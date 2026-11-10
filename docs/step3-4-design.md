@@ -215,7 +215,7 @@ sequenceDiagram
 - **設計判断**：Smart Closet と同様、**Cloudflare Pages Functions（`GET /api/sync-config`）による同一オリジン自動取得 ＋ 端末内 `meta` ストアでの手動設定上書きのハイブリッド方式**を採用する。
 - **理由とセキュリティ境界**：
   1. **平文非保持の厳守**：公開 GitHub リポジトリ、フロントエンドコード（`src/`）、およびビルド成果物（`dist/`）には GAS URL も合言葉も一切含めない（`VITE_*` 環境変数はビルド成果物に埋め込まれるため使用禁止）。
-  2. **Access 境界の強制（fail-closed）**：`functions/api/sync-config.ts` は Cloudflare Pages のサーバーレス環境変数（Secret: `SAKE_GAS_URL`, `SAKE_GAS_PASSPHRASE`）を読む。リクエストヘッダーに Cloudflare Access の認証証明（`Cf-Access-Jwt-Assertion` または `Cf-Access-Authenticated-User-Email`）が存在しない場合は `403 Forbidden` で拒否し、レスポンスには `Cache-Control: no-store` を付与する。
+  2. **Access 境界の強制（fail-closed）**：`functions/api/sync-config.ts` は Cloudflare Pages のサーバーレス環境変数（Secret: `SAKE_GAS_URL`, `SAKE_GAS_PASSPHRASE`, `SAKE_ACCESS_TEAM_DOMAIN`, `SAKE_ACCESS_AUD`）を読む。リクエストヘッダーに Cloudflare Access の JWT（`Cf-Access-Jwt-Assertion`）の署名・issuer・audience・有効期限を完全検証し、未設定・検証失敗時は `403 Forbidden` で拒否し、レスポンスには `Cache-Control: no-store` を付与する。
   3. **新しい端末でのゼロコンフィグ体験**：本人がスマホで Google ログイン（Cloudflare Access）してアプリを開くと、アプリが裏で `/api/sync-config` から接続設定を自動取得して IndexedDB の `meta` ストアにキャッシュするため、長い GAS URL や合言葉を手入力することなく即座に「今すぐ同期」が使える。ローカル開発時（`npm run dev`）は折りたたみ内の手動入力欄から設定できる。
 
 ---
@@ -232,19 +232,21 @@ sequenceDiagram
    - Cloudflare ダッシュボード > Workers & Pages > Create application > Pages > Connect to Git で `tahosook/sake-collection` を選択。
    - プロジェクト名：`sake-collection`、Production branch：`main`、Build command：`npm run build`、Build output directory：`dist`。
    - ※この時点ではまだ環境変数（`SAKE_GAS_URL` 等）は登録しない。
-3. **Cloudflare Access（Zero Trust）の設定（本番＋プレビュー両方を保護）**
-   - Cloudflare Zero Trust > Access > Applications > Add an application > Self-hosted を選択。
-   - Application domain に以下の **2つ** を登録する：
-     - `sake-collection.pages.dev`（本番ドメイン）
-     - `*.sake-collection.pages.dev`（すべてのブランチ／PR プレビュードメイン）
-   - Identity providers：Google を有効化。
-   - Policy（Allow）：Selector = `Emails`、Value = **ユーザー本人の Google アカウントのメールアドレスのみ**（リポジトリには記載しない）。
-   - さらに Cloudflare Pages > `sake-collection` > Settings > General の「Access Policy」でも Preview deployments に対する Access 保護が有効であることを確認する。
+3. **Cloudflare Access の設定（Pages 生成の2つの Access Application に一本化）**
+   - 手動の Self-hosted Application 作成は行わず、Cloudflare Pages の「Enable access policy」機能によって自動生成される2つの Access Application（本番 `*.pages.dev` 用と個別プレビュー `*.sake-collection.pages.dev` 用）に一本化して設定する。
+   - **Pages 側での有効化**: Cloudflare Pages > `sake-collection` > Settings > General > Access policy にて **「Enable access policy」** を有効化する。
+   - **Known issues の調整**: 自動生成された Preview ポリシーの設定を開き、Application domain に含まれるワイルドカード **`*` サブドメインを削除して保存**する（本番側保護との干渉を防ぐため）。再度 Pages の Settings > General > Access policy に戻り、**「Enable access policy」を選択し直す**（再適用）。
+   - **本人限定ポリシーの設定確認**: Zero Trust > Access > Applications にて、以下の2つのアプリケーションが存在し、両方とも Policy（Allow）が **ユーザー本人の Google アカウントのメールアドレスのみ（Selector: `Emails`）許可** になっていることを確認する：
+     - `*.pages.dev` 用アプリケーション（本番ドメイン用）
+     - `*.sake-collection.pages.dev` 用アプリケーション（個別プレビュー用）
+   - 各アプリケーションの Overview 画面からそれぞれの Audience Tag（AUD）を控え、Zero Trust の自組織チームドメイン（`<your-team-name>.cloudflareaccess.com`）を確認する。
 4. **Access 保護の動作確認と Pages Secret 環境変数の登録**
-   - シークレットウィンドウで `https://sake-collection.pages.dev` を開き、Cloudflare Access の Google ログイン画面が強制表示されること、本人以外のアカウントでは拒否されることを確認する。
-   - 確認後、Cloudflare Pages > `sake-collection` > Settings > Environment variables にて、**Production と Preview の両方** に Secret（Encrypt）として以下を登録し、再デプロイする：
-     - `SAKE_GAS_URL`：（手順1の GAS Web App URL）
-     - `SAKE_GAS_PASSPHRASE`：（手順1の `SYNC_PASSPHRASE` と同じ合言葉）
+   - シークレットウィンドウで本番 URL（`https://sake-collection.pages.dev`）およびハッシュ付き Preview URL の両方を開き、Cloudflare Access の Google ログイン画面が強制表示されること、本人以外のアカウントでは拒否されることを確認する。
+   - 確認後、Cloudflare Pages > `sake-collection` > Settings > Environment variables にて、以下の Secret（Encrypt）環境変数を登録し、再デプロイする：
+     - `SAKE_GAS_URL`：（手順1の GAS Web App URL、Production と Preview の両方）
+     - `SAKE_GAS_PASSPHRASE`：（手順1の `SYNC_PASSPHRASE` と同じ合言葉、Production と Preview の両方）
+     - `SAKE_ACCESS_TEAM_DOMAIN`：（チームドメイン、Production と Preview の両方）
+     - `SAKE_ACCESS_AUD`：環境ごとにその環境の Application の AUD を登録（Production 環境には本番用 Application の AUD、Preview 環境にはプレビュー用 Application の AUD）
 
 ### (2) エージェント側とユーザー手作業の切り分け
 
