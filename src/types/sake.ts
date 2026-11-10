@@ -194,3 +194,72 @@ export interface BackupData {
   bottles: BottleRecord[];
   photos: PhotoRecord[];
 }
+
+// ==========================================
+// ステップ4 同期用補助型定義
+// ==========================================
+
+/** 画像本体 (dataUrl) を除いた写真同期メタデータ */
+export type PhotoSyncMeta = Omit<PhotoRecord, 'dataUrl'>;
+
+/** 端末内の同期接続設定（IndexedDB meta ストア 'syncConfig' に保持） */
+export interface SyncConnectionConfig {
+  gasUrl: string;
+  passphrase: string;
+  source: 'auto' | 'manual';
+  updatedAt: string;
+}
+
+/** Phase 1: メタデータ同期リクエスト */
+export interface SyncMetadataRequest {
+  action: 'sync_metadata';
+  passphrase: string;
+  isInitialEmptyClient: boolean;
+  bottles: BottleRecord[];
+  photoMetas: PhotoSyncMeta[];
+  pendingDeletedPhotos?: PhotoSyncMeta[];
+}
+
+/** Phase 1: メタデータ同期レスポンス */
+export interface SyncMetadataResponse {
+  ok: boolean;
+  bottles: BottleRecord[];
+  photoMetas: PhotoSyncMeta[];
+  photosToUpload: string[];
+  syncedAt: string;
+  error?: string;
+  errorCode?: string;
+}
+
+/** Phase 2: 写真アップロードリクエスト */
+export interface UploadPhotoRequest {
+  action: 'upload_photo';
+  passphrase: string;
+  photo: PhotoRecord;
+}
+
+/** Phase 2: 写真アップロードレスポンス */
+export interface UploadPhotoResponse {
+  ok: boolean;
+  photoId: string;
+  driveFileId: string;
+  deduplicated: boolean;
+  error?: string;
+  errorCode?: string;
+}
+
+/** Phase 3: 写真ダウンロードリクエスト */
+export interface DownloadPhotosRequest {
+  action: 'download_photos';
+  passphrase: string;
+  photoIds: string[];
+}
+
+/** Phase 3: 写真ダウンロードレスポンス */
+export interface DownloadPhotosResponse {
+  ok: boolean;
+  photos: PhotoRecord[];
+  error?: string;
+  errorCode?: string;
+}
+

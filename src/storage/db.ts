@@ -1,7 +1,15 @@
 import { openDB, DBSchema, IDBPDatabase } from 'idb';
-import { BottleRecord, PhotoRecord, BackupData, SakeCategory, BottleStatus } from '../types/sake';
+import {
+  BottleRecord,
+  PhotoRecord,
+  PhotoSyncMeta,
+  BackupData,
+  SakeCategory,
+  BottleStatus,
+} from '../types/sake';
 import { SAMPLE_BOTTLES, SAMPLE_PHOTOS } from '../data/sampleData';
 import { validateBackupData } from '../domain/validation';
+import { toPhotoSyncMeta } from '../domain/syncMerge';
 
 export const DB_NAME = 'sake-collection-db';
 export const DB_VERSION = 1;
@@ -209,21 +217,25 @@ export async function deleteBottle(id: string, nowIso: string = new Date().toISO
 /**
  * ボトルと関連写真を単一トランザクションで保存する
  *
- * 要件（設計 §3.3 確定仕様）:
+ * 要件（設計 docs/step3-4-design.md §3(2) 確定仕様）:
  * - ボトルレコードを保存
  * - newPhotos に渡された新規・更新写真を保存
- * - ボトルの photoIds から外された写真のうち、Drive に未同期のローカル写真（driveFileId === null）は
- *   不要データ残存防止およびバックアップ双方向整合性（parentBottle.photoIds.includes(photo.id)）維持のため
- *   photos ストアから物理削除する
+ * - ボトルの photoIds から外された写真について:
+ *   - driveFileId !== null（Drive 同期済み）だった場合は、同一トランザクション内で
+ *     meta ストアの 'pendingDeletedPhotos' に削除予定メタデータ（deleted = true）を記録
+ *   - driveFileId の有無にかかわらず、ローカルの photos ストアからは即座に物理削除する
+ *   - これにより、直後にバックアップ JSON を書き出しても parentBottle.photoIds に含まれない
+ *     孤立写真が photos ストアに残る不整合（validateBackupData 失敗）を完全に防止する
  */
 export async function saveBottleWithPhotos(
   bottle: BottleRecord,
   newPhotos: PhotoRecord[] = []
 ): Promise<void> {
   const db = await getDb();
-  const tx = db.transaction(['bottles', 'photos'], 'readwrite');
+  const tx = db.transaction(['bottles', 'photos', 'meta'], 'readwrite');
   const bottleStore = tx.objectStore('bottles');
   const photoStore = tx.objectStore('photos');
+  const metaStore = tx.objectStore('meta');
 
   // 1. ボトル保存
   await bottleStore.put(bottle);
@@ -233,13 +245,44 @@ export async function saveBottleWithPhotos(
     await photoStore.put(photo);
   }
 
-  // 3. このボトルに現在紐づく写真のうち、photoIds から外れた未同期ローカル写真を物理削除
+  // 3. このボトルに現在紐づく写真のうち、photoIds から外れた写真を処理
   const existingPhotos = await photoStore.index('by_bottleId').getAll(bottle.id);
   const activePhotoIdSet = new Set(bottle.photoIds);
+  const removedPhotos = existingPhotos.filter((p) => !activePhotoIdSet.has(p.id));
 
-  for (const p of existingPhotos) {
-    if (!activePhotoIdSet.has(p.id) && p.driveFileId === null) {
+  if (removedPhotos.length > 0) {
+    const removedSyncedMetas: PhotoSyncMeta[] = [];
+
+    for (const p of removedPhotos) {
+      if (p.driveFileId !== null) {
+        const meta = toPhotoSyncMeta(p);
+        removedSyncedMetas.push({
+          ...meta,
+          deleted: true,
+          updatedAt: bottle.updatedAt,
+        });
+      }
+      // ローカル photos ストアからは即座に物理削除
       await photoStore.delete(p.id);
+    }
+
+    // Drive 同期済みだった写真があれば pendingDeletedPhotos に追記
+    if (removedSyncedMetas.length > 0) {
+      const existingMetaRecord = await metaStore.get('pendingDeletedPhotos');
+      const currentPending = Array.isArray(existingMetaRecord?.value)
+        ? (existingMetaRecord.value as PhotoSyncMeta[])
+        : [];
+
+      const pendingMap = new Map<string, PhotoSyncMeta>(currentPending.map((m) => [m.id, m]));
+      for (const m of removedSyncedMetas) {
+        pendingMap.set(m.id, m);
+      }
+
+      await metaStore.put({
+        key: 'pendingDeletedPhotos',
+        value: Array.from(pendingMap.values()),
+        updatedAt: bottle.updatedAt,
+      });
     }
   }
 
@@ -442,6 +485,82 @@ export async function setMeta<T>(key: string, value: T, nowIso: string = new Dat
     value,
     updatedAt: nowIso,
   });
+}
+
+// ==========================================
+// 同期コミット・メタデータ操作 (Sync Commit)
+// ==========================================
+
+export interface CommitSyncResultInput {
+  /** 反映する全ボトルレコード（LWW マージ結果） */
+  bottles: BottleRecord[];
+  /** ローカル photos ストアから物理削除する写真 ID リスト (孤立・不要データ) */
+  photosToPurge?: string[];
+  /** ローカル photos ストアに追加または更新する写真レコード */
+  photosToUpsert?: PhotoRecord[];
+  /** 確定した同期完了日時 (ISO 8601 UTC) */
+  syncedAtIso: string;
+}
+
+/**
+ * 同期結果を単一トランザクションで IndexedDB にアトミック反映する
+ */
+export async function commitSyncResultToDb(input: CommitSyncResultInput): Promise<void> {
+  const { bottles, photosToPurge = [], photosToUpsert = [], syncedAtIso } = input;
+  const db = await getDb();
+  const tx = db.transaction(['bottles', 'photos', 'meta'], 'readwrite');
+  const bottleStore = tx.objectStore('bottles');
+  const photoStore = tx.objectStore('photos');
+  const metaStore = tx.objectStore('meta');
+
+  // 1. ボトル全件 put
+  for (const b of bottles) {
+    await bottleStore.put(b);
+  }
+
+  // 2. 孤立・削除済み写真の物理削除
+  for (const pid of photosToPurge) {
+    await photoStore.delete(pid);
+  }
+
+  // 3. 新規ダウンロード・更新写真の保存
+  for (const p of photosToUpsert) {
+    await photoStore.put(p);
+  }
+
+  // 4. pendingDeletedPhotos のクリア
+  await metaStore.put({
+    key: 'pendingDeletedPhotos',
+    value: [],
+    updatedAt: syncedAtIso,
+  });
+
+  // 5. lastSyncAt の更新
+  await metaStore.put({
+    key: 'lastSyncAt',
+    value: syncedAtIso,
+    updatedAt: syncedAtIso,
+  });
+
+  // 6. 一時ダウンロードキャッシュがあれば削除
+  await metaStore.delete('syncDownloadCache');
+
+  await tx.done;
+}
+
+/**
+ * 未同期の削除予定写真メタデータを取得する
+ */
+export async function getPendingDeletedPhotos(): Promise<PhotoSyncMeta[]> {
+  const meta = await getMeta<PhotoSyncMeta[]>('pendingDeletedPhotos');
+  return Array.isArray(meta) ? meta : [];
+}
+
+/**
+ * 未同期の削除予定写真メタデータをクリアする
+ */
+export async function clearPendingDeletedPhotos(nowIso: string = new Date().toISOString()): Promise<void> {
+  await setMeta<PhotoSyncMeta[]>('pendingDeletedPhotos', [], nowIso);
 }
 
 // ==========================================
