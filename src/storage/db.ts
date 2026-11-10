@@ -3,6 +3,7 @@ import {
   BottleRecord,
   PhotoRecord,
   PhotoSyncMeta,
+  SyncConnectionConfig,
   BackupData,
   SakeCategory,
   BottleStatus,
@@ -692,4 +693,95 @@ export async function clearDatabase(): Promise<void> {
   await tx.objectStore('photos').clear();
   await tx.objectStore('meta').clear();
   await tx.done;
+}
+
+// ==========================================
+// 同期設定・キャッシュ操作 (Sync Config & Cache)
+// ==========================================
+
+/**
+ * 端末内の同期接続設定を取得する
+ */
+export async function getSyncConfig(): Promise<SyncConnectionConfig | null> {
+  const meta = await getMeta<SyncConnectionConfig>('syncConfig');
+  return meta ?? null;
+}
+
+/**
+ * 端末内の同期接続設定を保存する
+ */
+export async function saveSyncConfig(config: SyncConnectionConfig): Promise<void> {
+  await setMeta<SyncConnectionConfig>('syncConfig', config, config.updatedAt);
+}
+
+/**
+ * 最終同期日時を取得する (ISO 8601 UTC または null)
+ */
+export async function getLastSyncAt(): Promise<string | null> {
+  const meta = await getMeta<string>('lastSyncAt');
+  return typeof meta === 'string' && meta.length > 0 ? meta : null;
+}
+
+/**
+ * 写真レコードの driveFileId を更新する
+ */
+export async function updatePhotoDriveFileId(
+  photoId: string,
+  driveFileId: string,
+  nowIso: string = new Date().toISOString()
+): Promise<void> {
+  const db = await getDb();
+  const tx = db.transaction('photos', 'readwrite');
+  const store = tx.objectStore('photos');
+  const existing = await store.get(photoId);
+  if (existing) {
+    await store.put({
+      ...existing,
+      driveFileId,
+      updatedAt: nowIso,
+    });
+  }
+  await tx.done;
+}
+
+/**
+ * 一時ダウンロードキャッシュの写真一覧を取得する
+ */
+export async function getSyncDownloadCache(): Promise<PhotoRecord[]> {
+  const meta = await getMeta<PhotoRecord[]>('syncDownloadCache');
+  return Array.isArray(meta) ? meta : [];
+}
+
+/**
+ * 一時ダウンロードキャッシュに写真を追加・保存する (レジューム用)
+ */
+export async function saveSyncDownloadCache(
+  photos: PhotoRecord[],
+  nowIso: string = new Date().toISOString()
+): Promise<void> {
+  const db = await getDb();
+  const tx = db.transaction('meta', 'readwrite');
+  const metaStore = tx.objectStore('meta');
+  const existingRec = await metaStore.get('syncDownloadCache');
+  const existingList = Array.isArray(existingRec?.value) ? (existingRec.value as PhotoRecord[]) : [];
+
+  const map = new Map<string, PhotoRecord>(existingList.map((p) => [p.id, p]));
+  for (const p of photos) {
+    map.set(p.id, p);
+  }
+
+  await metaStore.put({
+    key: 'syncDownloadCache',
+    value: Array.from(map.values()),
+    updatedAt: nowIso,
+  });
+  await tx.done;
+}
+
+/**
+ * 一時ダウンロードキャッシュをクリアする
+ */
+export async function clearSyncDownloadCache(): Promise<void> {
+  const db = await getDb();
+  await db.delete('meta', 'syncDownloadCache');
 }

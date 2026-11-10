@@ -16,6 +16,8 @@ import { GroupDetailSheet } from './components/GroupDetailSheet';
 import { BottleDetailModal } from './components/BottleDetailModal';
 import { BottleFormModal } from './components/BottleFormModal';
 import { DataManagementView } from './components/DataManagementView';
+import { executeFullSync } from './services/syncService';
+import { CloudIcon, ArrowPathIcon } from './components/Icons';
 
 export const App: React.FC = () => {
   const {
@@ -24,6 +26,7 @@ export const App: React.FC = () => {
     photos,
     isLoading,
     error,
+    refresh,
     updateBottle,
     saveBottleAndPhotos,
     saveBottlesBatch,
@@ -51,6 +54,29 @@ export const App: React.FC = () => {
   const [selectedBottleForDetail, setSelectedBottleForDetail] = useState<BottleRecord | null>(null);
   const [isFormModalOpen, setIsFormModalOpen] = useState<boolean>(false);
   const [editingBottle, setEditingBottle] = useState<BottleRecord | null>(null);
+
+  // 空端末時のワンタップ復元状態
+  const [isRestoring, setIsRestoring] = useState<boolean>(false);
+  const [restoreProgress, setRestoreProgress] = useState<string | null>(null);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
+
+  const handleRestoreFromCloud = async () => {
+    if (isRestoring) return;
+    setIsRestoring(true);
+    setRestoreProgress('同期を開始中...');
+    setRestoreError(null);
+    try {
+      await executeFullSync({
+        onProgress: (p) => setRestoreProgress(p.message),
+      });
+      await refresh();
+    } catch (err) {
+      setRestoreError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsRestoring(false);
+      setRestoreProgress(null);
+    }
+  };
 
   // 1. 各状態ごとのボトル分類（deleted は既に除外済み）
   const inventoryBottles = bottles.filter(
@@ -220,26 +246,59 @@ export const App: React.FC = () => {
         {/* データゼロ時の初期案内バナー（未読込・空端末対応） */}
         {!isLoading && allBottles.length === 0 && (
           <div className="bg-white p-5 rounded-2xl border border-stone-200 shadow-sm text-center space-y-3">
+            <div className="w-10 h-10 mx-auto rounded-xl bg-amber-50 border border-amber-200 text-amber-900 flex items-center justify-center">
+              <CloudIcon className="w-6 h-6" />
+            </div>
             <h2 className="text-base font-bold text-stone-900">
-              お酒のデータがありません
+              お酒のコレクションがありません
             </h2>
             <p className="text-xs text-stone-600 leading-relaxed">
-              受入確認用のサンプルデータを読み込むか、下部の「登録」からお持ちのお酒を手入力で登録してください。
+              クラウドからデータを同期して復元するか、新しいお酒を登録してください。
             </p>
-            <div className="pt-2 flex flex-col gap-2">
+
+            {restoreError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-xl font-medium text-left whitespace-pre-line">
+                復元に失敗しました: {restoreError}
+              </div>
+            )}
+
+            <div className="pt-2 flex flex-col gap-2.5">
+              {/* 最優先: クラウドからデータを復元（今すぐ同期） */}
               <button
                 type="button"
-                onClick={resetWithSampleData}
-                className="w-full min-h-touch bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-xs py-2.5 rounded-xl transition"
+                onClick={handleRestoreFromCloud}
+                disabled={isRestoring}
+                className="w-full min-h-[48px] bg-stone-900 hover:bg-stone-800 active:bg-black disabled:bg-stone-400 text-white font-bold text-sm py-3 px-4 rounded-xl transition flex items-center justify-center gap-2 shadow-sm"
               >
-                サンプルデータを読み込む（14本・写真4枚）
+                {isRestoring ? (
+                  <>
+                    <ArrowPathIcon className="w-5 h-5 animate-spin" />
+                    <span>{restoreProgress || 'クラウドから復元中...'}</span>
+                  </>
+                ) : (
+                  <>
+                    <CloudIcon className="w-5 h-5 text-amber-400" />
+                    <span>クラウドからデータを復元（今すぐ同期）</span>
+                  </>
+                )}
               </button>
+
               <button
                 type="button"
                 onClick={handleOpenCreate}
-                className="w-full min-h-touch bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs py-2.5 rounded-xl transition"
+                disabled={isRestoring}
+                className="w-full min-h-touch bg-stone-100 hover:bg-stone-200 text-stone-800 font-bold text-xs py-2.5 rounded-xl border border-stone-300 transition"
               >
                 最初のお酒を手入力登録する
+              </button>
+
+              <button
+                type="button"
+                onClick={resetWithSampleData}
+                disabled={isRestoring}
+                className="w-full min-h-touch bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 font-bold text-xs py-2.5 rounded-xl transition"
+              >
+                受入確認用サンプルデータを読み込む（14本）
               </button>
             </div>
           </div>
@@ -357,6 +416,7 @@ export const App: React.FC = () => {
                 onImportBackup={importBackup}
                 onResetSampleData={resetWithSampleData}
                 onClearAll={clearAll}
+                onSyncComplete={refresh}
               />
             )}
           </>
