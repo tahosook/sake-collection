@@ -163,60 +163,55 @@ Cloudflare ダッシュボードにログインし、本番およびプレビュ
 5. デプロイ完了後、割り当てられたドメイン（`https://sake-collection.pages.dev`）を確認します。
 
 ### 3.2 Cloudflare Access（Zero Trust）の設定
-本番環境およびすべてのプレビュー環境（ブランチプレビュー・個別コミット／デプロイハッシュ付き URL）を、Google ログインによる本人限定アクセスで保護します。
+Cloudflare Pages のアクセス制御機能（Access policy）を活用し、本番環境（`sake-collection.pages.dev`）およびすべてのプレビュー環境（`*.sake-collection.pages.dev`）を、Google ログインによる本人限定アクセスで保護します。手動での個別アプリケーション作成は行わず、Pages が生成する2つの Access Application を設定・管理する形に一本化します。
 
-1. **Zero Trust Access アプリケーションの作成**:
-   - Cloudflare ダッシュボード > 左メニュー **Zero Trust** を開きます。
-   - **Access** > **Applications** > **Add an application** をクリックし、**Self-hosted** を選択します。
-2. **Application Configuration**:
-   - **Application name**: `sake-collection`
-   - **Session Duration**: `24 hours`（または任意）
-   - **Application domain**: 以下の **2つのドメイン** を登録します。
-     - 本番: `sake-collection.pages.dev`
-     - プレビュー全域: `*.sake-collection.pages.dev`
-3. **Identity Providers**:
-   - `Google` を選択（有効化されていない場合は Zero Trust > Settings > Authentication で Google IdP を追加）。
-4. **Policy の追加**:
-   - **Policy name**: `Allow Owner Only`
-   - **Action**: `Allow`
-   - **Configure rules**:
-     - **Selector**: `Emails`
-     - **Value**: `<あなたのGoogleアカウントのメールアドレス>`（リポジトリには記載しない）
-5. **Pages プロジェクト側の Preview Deployment Access Policy 設定と既知の問題（Known issues）への対応**:
-   - Cloudflare Pages のプレビュー保護機能には、有効化時に生成されるポリシー設定と本番側の保護設定が衝突する既知の挙動（Known issues）があります。本番ドメインとプレビュー環境の両方を確実に保護するため、以下の手順で設定・調整します：
-     1. **Enable access policy の初期有効化**:
-        - Cloudflare ダッシュボード > **Workers & Pages** > **`sake-collection`** > **Settings** > **General** を開き、画面下部の **Access policy** セクションで **「Enable access policy」**（プレビューデプロイへのアクセス制御）をクリックして有効化します。
-     2. **自動生成された Preview ポリシーの「*」サブドメイン削除**:
-        - 有効化後に Zero Trust > **Access** > **Applications** を開くと、Pages のプレビュー用アプリケーション（ポリシー）が自動生成されています。
-        - その設定を開き、Application domain に含まれているワイルドカード **`*` サブドメイン** を削除して保存します（この `*` が残っていると本番ドメインの保護と干渉・衝突するため）。
-     3. **Pages 側でのポリシー再選択**:
-        - 再度 Workers & Pages > **`sake-collection`** > **Settings** > **General** > **Access policy** に戻り、**「Enable access policy」** を選択し直します（または再適用します）。
-     4. **2つのポリシーの存在と本人限定アクセスの確認**:
-        - Zero Trust > **Access** > **Applications** にて、以下の **2つのポリシー（アプリケーション）** が正しく独立して存在することを確認します：
-          - **`*.pages.dev` 用アプリケーション**: 本番ドメイン（`sake-collection.pages.dev`）およびブランチプレビュー全域用
-          - **`*.sake-collection.pages.dev` 用（Preview Deployment）アプリケーション**: Pages が生成するハッシュ付き個別プレビュー URL 用
-        - 両方のアプリケーションの Policy ルールが、**本人の Google メールアドレス（Selector: `Emails`）のみ許可** になっていることを確認します。
+1. **Pages プロジェクト側での Access policy の初期有効化**:
+   - Cloudflare ダッシュボード > **Workers & Pages** > **`sake-collection`** を開きます。
+   - **Settings** > **General** を開き、画面下部の **Access policy** セクションまでスクロールします。
+   - **「Enable access policy」**（プレビューデプロイへのアクセス制御）をクリックして有効化します。
+   - ※これにより、Zero Trust 側に Pages 用の Access Application が自動作成されます。
+2. **自動生成された Preview ポリシーの調整（Known issues 対応）**:
+   - Cloudflare の現行仕様では、自動生成時に `*` サブドメインが含まれて本番側設定と干渉する既知の挙動（Known issues）があります。以下の手順で調整します：
+     1. 左メニュー **Zero Trust** > **Access** > **Applications** を開きます。
+     2. 自動生成された Pages プレビュー用アプリケーションの設定を開き、Application domain に含まれているワイルドカード **`*` サブドメイン** を削除して保存します。
+     3. 再度 Workers & Pages > **`sake-collection`** > **Settings** > **General** > **Access policy** に戻り、**「Enable access policy」** を選択し直します（または再適用します）。
+3. **2つの Access Application への本人限定ポリシーの設定**:
+   - Zero Trust > **Access** > **Applications** にて、Pages によって以下の **2つのアプリケーション** が生成されていることを確認します：
+     - **本番用アプリケーション（`*.pages.dev` 用）**: 本番ドメイン（`sake-collection.pages.dev`）用
+     - **プレビュー用アプリケーション（`*.sake-collection.pages.dev` 用）**: 個別コミットや PR のプレビュー URL 用
+   - それぞれのアプリケーションを開き、**Policies** タブで本人限定の Allow ポリシーを設定（または確認）します：
+     - **Policy name**: `Allow Owner Only`
+     - **Action**: `Allow`
+     - **Configure rules**:
+       - **Selector**: `Emails`
+       - **Value**: `<あなたのGoogleアカウントのメールアドレス>`（リポジトリには記載しない）
+     - ※Identity Providers に `Google` が有効化されていることを確認します（未設定の場合は Zero Trust > Settings > Authentication で Google IdP を追加）。
    - ※この手順により、本番 URL だけでなく、個別コミットや PR ごとに生成されるハッシュ付き Preview Deployment URL（例: `<deployment-hash>.sake-collection.pages.dev`）へのダイレクトアクセスも漏れなく Cloudflare Access で確実に保護されます。
-6. **Audience Tag (AUD) の取得**:
-   - Zero Trust > Access > Applications で作成した `sake-collection` アプリケーションの **Overview** 画面を開きます。
-   - 画面内に表示されている **Audience Tag (AUD)**（英数字の長いハッシュ文字列）をコピーして控えます。
-7. **チームドメイン（Team Domain）の確認**:
+4. **環境別の Audience Tag (AUD) の取得**:
+   - 本番用とプレビュー用の **両方のアプリケーションから、それぞれの Audience Tag (AUD) を控えます**（次項の環境変数登録で Production と Preview に分けて個別に登録します）：
+     - **本番用 AUD**: 本番用アプリケーション（`*.pages.dev` 用）の **Overview** 画面に表示されている AUD 文字列をコピーして控えます。
+     - **プレビュー用 AUD**: プレビュー用アプリケーション（`*.sake-collection.pages.dev` 用）の **Overview** 画面に表示されている AUD 文字列をコピーして控えます。
+5. **チームドメイン（Team Domain）の確認**:
    - Zero Trust > Settings > Custom Pages または Overview から、自組織のチームドメインを確認して控えます。
    - 例: `<your-team-name>.cloudflareaccess.com`
 
 ### 3.3 Pages Secret 環境変数の登録
 Pages Functions（`/api/sync-config`）が Access JWT の完全検証を行い、GAS URL と合言葉を安全にクライアントへ返すための環境変数を設定します。
+実装（`functions/api/sync-config.ts`）は環境ごとに単一の AUD を検証する仕様となっているため、`SAKE_ACCESS_AUD` は環境ごとにその環境に対応する Application の AUD を登録します（Production 環境には本番用 Application の AUD、Preview 環境にはプレビュー用 Application の AUD）。
 
 1. Cloudflare ダッシュボード > **Workers & Pages** > **`sake-collection`** を開きます。
 2. **Settings** > **Environment variables** を開きます。
-3. **Production** と **Preview** の **両方の環境** に対して、以下の **4つ** の変数を **Encrypt（Secret）** として登録します。
+3. 以下の環境変数を **Encrypt（Secret）** として登録します。
 
-| 変数名 | タイプ | 設定する値 |
-| :--- | :---: | :--- |
-| `SAKE_GAS_URL` | Secret | 手順 2.4 で控えた GAS ウェブアプリ URL (`https://script.google.com/macros/s/<DEPLOYMENT_ID>/exec`) |
-| `SAKE_GAS_PASSPHRASE` | Secret | 手順 2.3 で設定した `SYNC_PASSPHRASE` と同一の文字列 |
-| `SAKE_ACCESS_TEAM_DOMAIN` | Secret | 手順 3.2 で確認したチームドメイン (`<your-team-name>.cloudflareaccess.com`) |
-| `SAKE_ACCESS_AUD` | Secret | 手順 3.2 で控えた Access Application の Audience Tag |
+| 変数名 | タイプ | 設定する値 | 対象環境 |
+| :--- | :---: | :--- | :--- |
+| `SAKE_GAS_URL` | Secret | 手順 2.4 で控えた GAS ウェブアプリ URL (`https://script.google.com/macros/s/<DEPLOYMENT_ID>/exec`) | **Production と Preview の両方** |
+| `SAKE_GAS_PASSPHRASE` | Secret | 手順 2.3 で設定した `SYNC_PASSPHRASE` と同一の文字列 | **Production と Preview の両方** |
+| `SAKE_ACCESS_TEAM_DOMAIN` | Secret | 手順 3.2 で確認したチームドメイン (`<your-team-name>.cloudflareaccess.com`) | **Production と Preview の両方** |
+| `SAKE_ACCESS_AUD` | Secret | 手順 3.2 で控えた **本番用 Application（`*.pages.dev` 用）の AUD** | **Production 環境のみ** |
+| `SAKE_ACCESS_AUD` | Secret | 手順 3.2 で控えた **プレビュー用 Application（`*.sake-collection.pages.dev` 用）の AUD** | **Preview 環境のみ** |
+
+※Cloudflare Pages の Environment variables 画面では、変数ごとに「Production」と「Preview」で個別の値を登録できます。`SAKE_GAS_URL`, `SAKE_GAS_PASSPHRASE`, `SAKE_ACCESS_TEAM_DOMAIN` の3点は両環境共通の値を設定し、`SAKE_ACCESS_AUD` のみそれぞれの環境に対応する AUD を登録してください。
 
 4. 設定保存後、最新のデプロイメントに対して **「Retry deployment」**（再デプロイ）を実行し、環境変数を反映させます。
 
@@ -249,7 +244,7 @@ Pages Functions（`/api/sync-config`）が Access JWT の完全検証を行い�
 | 3 | **Google スプレッドシート** | ファイル名が `sake-collection-db` であり、固有のシート ID を持つこと。他アプリのシートと共有していないこと。 | [ ] 独立確認 |
 | 4 | **GAS プロジェクト** | プロジェクト名が `sake-collection-sync` であり、固有のデプロイ URL を持つこと。スクリプトプロパティの合言葉・各リソース ID が専用のものであること。 | [ ] 独立確認 |
 | 5 | **Cloudflare Pages** | プロジェクト名が `sake-collection` であり、`sake-collection.pages.dev` で稼働していること。環境変数が `SAKE_*` プレフィックスで管理されていること。 | [ ] 独立確認 |
-| 6 | **Cloudflare Access** | Application 名が `sake-collection` であり、対象ドメインが `sake-collection.pages.dev` および `*.sake-collection.pages.dev` のみに限定されていること。固有の AUD を持っていること。 | [ ] 独立確認 |
+| 6 | **Cloudflare Access** | Pages が生成した `sake-collection` の本番用・プレビュー用の2つの Access Application であり、対象ドメインが本番および個別プレビュー URL に限定され、他アプリと分離した固有の AUD を持っていること。 | [ ] 独立確認 |
 
 ---
 
