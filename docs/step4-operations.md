@@ -163,26 +163,33 @@ Cloudflare ダッシュボードにログインし、本番およびプレビュ
 5. デプロイ完了後、割り当てられたドメイン（`https://sake-collection.pages.dev`）を確認します。
 
 ### 3.2 Cloudflare Access（Zero Trust）の設定
-本番環境およびすべてのプレビュー環境を、Google ログインによる本人限定アクセスで保護します。
+本番環境およびすべてのプレビュー環境（ブランチプレビュー・個別コミット／デプロイハッシュ付き URL）を、Google ログインによる本人限定アクセスで保護します。
 
-1. Cloudflare ダッシュボード > 左メニュー **Zero Trust** を開きます。
-2. **Access** > **Applications** > **Add an application** をクリックし、**Self-hosted** を選択します。
-3. **Application Configuration**:
+1. **Zero Trust Access アプリケーションの作成**:
+   - Cloudflare ダッシュボード > 左メニュー **Zero Trust** を開きます。
+   - **Access** > **Applications** > **Add an application** をクリックし、**Self-hosted** を選択します。
+2. **Application Configuration**:
    - **Application name**: `sake-collection`
    - **Session Duration**: `24 hours`（または任意）
    - **Application domain**: 以下の **2つのドメイン** を登録します。
      - 本番: `sake-collection.pages.dev`
      - プレビュー全域: `*.sake-collection.pages.dev`
-4. **Identity Providers**:
+3. **Identity Providers**:
    - `Google` を選択（有効化されていない場合は Zero Trust > Settings > Authentication で Google IdP を追加）。
-5. **Policy の追加**:
+4. **Policy の追加**:
    - **Policy name**: `Allow Owner Only`
    - **Action**: `Allow`
    - **Configure rules**:
      - **Selector**: `Emails`
      - **Value**: `<あなたのGoogleアカウントのメールアドレス>`（リポジトリには記載しない）
+5. **Pages プロジェクト側の Preview Deployment Access Policy 設定・確認**:
+   - Cloudflare ダッシュボード > **Workers & Pages** > **`sake-collection`** を開きます。
+   - **Settings** > **General** を開き、画面をスクロールして **Access policy** セクションを確認します。
+   - **「Enable access policy」**（プレビューデプロイへのアクセス制御）をクリックして有効化します（すでに有効化されている場合は「Manage」からポリシー内容を確認）。
+   - プレビュー用に適用されるポリシーのルールが、本人のメールアドレス（Selector: `Emails`）のみを許可する設定になっていることを確認・調整します。
+   - ※この設定により、Zero Trust 側のワイルドカードドメイン保護に加えて、Pages が生成するハッシュ付きの個別 Preview Deployment URL（例: `<deployment-hash>.sake-collection.pages.dev`）に対するダイレクトアクセスも確実に Cloudflare Access で遮断・保護されます。
 6. **Audience Tag (AUD) の取得**:
-   - 作成した Application（`sake-collection`）の **Overview** 画面を開きます。
+   - Zero Trust > Access > Applications で作成した `sake-collection` アプリケーションの **Overview** 画面を開きます。
    - 画面内に表示されている **Audience Tag (AUD)**（英数字の長いハッシュ文字列）をコピーして控えます。
 7. **チームドメイン（Team Domain）の確認**:
    - Zero Trust > Settings > Custom Pages または Overview から、自組織のチームドメインを確認して控えます。
@@ -205,12 +212,17 @@ Pages Functions（`/api/sync-config`）が Access JWT の完全検証を行い�
 4. 設定保存後、最新のデプロイメントに対して **「Retry deployment」**（再デプロイ）を実行し、環境変数を反映させます。
 
 ### 3.4 Access 保護と設定自動取得の疎通確認
-1. **未認証アクセスの遮断確認**:
-   - ブラウザのシークレットウィンドウを開き、`https://sake-collection.pages.dev` にアクセスします。
-   - 即座に Cloudflare Access の Google ログイン画面へリダイレクトされることを確認します。
-   - 許可されていない別のアカウントでログインを試み、アクセスが拒否されることを確認します。
+本番 URL とハッシュ付き個別 Preview URL の両方で、未認証アクセスが確実に遮断され、本人のみアクセスできることを確認します。
+
+1. **未認証アクセスの遮断確認（本番 URL およびハッシュ付き Preview URL）**:
+   - Cloudflare Pages の **Deployments** 一覧から、直近のプレビューデプロイの個別ハッシュ付き URL（例: `https://<deployment-hash>.sake-collection.pages.dev`）をコピーします。
+   - ブラウザのシークレットウィンドウを開き、以下の2つの URL に順にアクセスします：
+     - 本番 URL: `https://sake-collection.pages.dev`
+     - ハッシュ付き Preview URL: `https://<deployment-hash>.sake-collection.pages.dev`
+   - 両方の URL で、ページ本体が表示されることなく即座に Cloudflare Access の Google ログイン画面へリダイレクトされることを確認します。
+   - 許可されていない別のアカウントでログインを試み、アクセスが拒否（403 Forbidden または Access Denied）されることを確認します。
 2. **本人ログインと自動設定取得の確認**:
-   - 本人の Google アカウントでログインし、sake-collection のメイン画面が表示されることを確認します。
+   - 本人の Google アカウントでログインし、sake-collection のメイン画面が表示されることを確認します（本番 URL および Preview URL の両方）。
    - 画面下部「データ管理」タブを開き、最上部の同期カードを確認します。
    - 「⚙️ 同期設定・バックアップ・初期化を開く」を展開し、同期接続設定のステータスが **「サーバーから自動取得済み」**（緑色）になっていることを確認します。
    - 「接続テスト (ping)」ボタンをクリックし、**「接続成功 (sake-collection サーバーと正常に通信できました)」** と表示されることを確認します。
@@ -236,20 +248,27 @@ Pages Functions（`/api/sync-config`）が Access JWT の完全検証を行い�
 
 すべてのリソースが構築された後、設計書 §7 に定める以下の受入シナリオを実施します。
 
-### シナリオ 1: 飲んだ記録での「また買いたい」絞り込み確認
+### シナリオ 1: 本人限定アクセスの確認（本番 URL およびハッシュ付き Preview URL）
+1. Cloudflare Pages のデプロイ一覧から、ハッシュ付きの個別 Preview URL（`https://<deployment-hash>.sake-collection.pages.dev`）を取得します。
+2. シークレットウィンドウを開き、本番 URL（`https://sake-collection.pages.dev`）およびハッシュ付き Preview URL の両方に未認証でアクセスします。
+3. いずれの URL でもコンテンツが表示されず、即座に Cloudflare Access の Google ログイン画面へリダイレクトされることを確認します。
+4. 許可リストに含まれない別のアカウントでログインを試み、アクセスが拒否（403 Forbidden 等）されることを確認します。
+5. 本人の Google アカウントでログインし、本番・Preview の両方で正常にアプリが表示されることを確認します。
+
+### シナリオ 2: 飲んだ記録での「また買いたい」絞り込み確認
 1. アプリ上で「飲んだ記録」タブを開きます。
 2. 検索バー右側の「⭐ また買いたいのみ」トグルをタップして ON にします。
 3. `wantToBuyAgain: true` のボトルのみが表示され、種類フィルタやテキスト検索と掛け合わせても正しく動作することを確認します。
 4. ボトル詳細モーダルの状態変更パネルを開き、日付の手修正や空欄化（クリア）が正常に保存できることを確認します。
 
-### シナリオ 2: 初回同期（PC 端末からクラウドへ）
+### シナリオ 3: 初回同期（PC 端末からクラウドへ）
 1. PC ブラウザ（ログイン済み）で酒のデータを新規登録します（カメラまたはファイルから写真を1枚以上添付）。
 2. 「データ管理」タブの「今すぐ同期」ボタンをクリックします。
 3. 進捗バーが進み、「ボトル情報を同期中...」→「写真を送信中 (1/1)...」→「データを確定中...」を経て「同期が完了しました」と表示されることを確認します。
 4. Google スプレッドシート（`sake-collection-db`）を開き、`Bottles`, `Photos`, `SyncMeta` シートが作成され、登録したボトルと写真のメタデータが記録されていることを確認します。
 5. Google Drive（`sake-collection-photos`）を開き、アップロードされた画像ファイルが作成されていることを確認します。
 
-### シナリオ 3: 新規空端末からのワンタップ完全復元（スマホ受入確認）
+### シナリオ 4: 新規空端末からのワンタップ完全復元（スマホ受入確認）
 1. スマートフォン（iPhone / Android）のブラウザで `https://sake-collection.pages.dev` を開きます。
 2. Cloudflare Access の Google ログイン画面が表示されるので、本人のアカウントでログインします。
 3. データ0件の状態で開くと、トップ画面最上部に **「クラウドからデータを復元（今すぐ同期）」** の目立つ案内バナーが表示されていることを確認します。
@@ -257,7 +276,7 @@ Pages Functions（`/api/sync-config`）が Access JWT の完全検証を行い�
 5. 同期オーケストレーターが自動的に設定を取得し、Google 側からボトルデータと写真を一括ダウンロードして IndexedDB に復元することを確認します。
 6. 復元完了後、PC 側で登録したお酒の一覧・写真がスマートフォン上でも鮮明に表示されることを確認します。
 
-### シナリオ 4: 写真差し替え・削除時の双方向整合と Drive ゴミ箱移動
+### シナリオ 5: 写真差し替え・削除時の双方向整合と Drive ゴミ箱移動
 1. PC 端末で登録済みボトルの詳細を開き、「編集」から添付写真を削除（または別写真に差し替え）して保存します。
 2. 「今すぐ同期」を実行します。
 3. Google Drive のゴミ箱を確認し、外された古い写真ファイルが Drive のゴミ箱（`setTrashed(true)`）に移動していることを確認します。
