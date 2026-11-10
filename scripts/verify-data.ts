@@ -308,6 +308,8 @@ function verifyNoRealPhotosOrData(): void {
     'package.json',
     'package-lock.json',
     'tsconfig.json',
+    path.join('gas', 'appsscript.json'),
+    'gas/appsscript.json',
   ]);
 
   // スキャン除外ディレクトリ
@@ -446,12 +448,101 @@ function verifyNoDirectLlmApi(): void {
   console.log('✓ 外部 LLM API 直呼び出し禁止検査完了: 直接呼び出し・SDK 参照なし (ファイル全体および依存関係)');
 }
 
+/**
+ * 5. 秘密情報（合言葉・実デプロイURL）および他アプリ（Smart Closet）識別子の混入防止検査
+ *
+ * 設計: docs/step3-4-design.md §2(5), PR #12
+ * - 実 GAS デプロイ URL (script.google.com/macros/s/) のハードコード禁止
+ * - クライアント埋め込み環境変数 (VITE_GAS_*) の定義禁止
+ * - Smart Closet の識別子の平文混入禁止
+ */
+function verifyNoSecretsOrCrossAppIdentifiers(): void {
+  console.log('--- 5. 秘密情報・他アプリ識別子混入防止検査 ---');
+  const projectRoot = process.cwd();
+
+  // 走査対象ディレクトリ（コード、関数、GAS、公開アセット）
+  const targetDirs = ['src', 'functions', 'gas', 'public'];
+  const targetFiles = [
+    'eslint.config.js',
+    'vite.config.ts',
+    'tailwind.config.js',
+    'postcss.config.js',
+    'index.html',
+    'package.json',
+  ];
+
+  // 検出パターン
+  const forbiddenPatterns: Array<{ name: string; regex: RegExp }> = [
+    {
+      name: '実 GAS デプロイ URL (script.google.com/macros/s/)',
+      regex: new RegExp(['script', 'google', 'com/macros/s/'].join('.')),
+    },
+    {
+      name: 'クライアント埋め込み GAS 環境変数 (VITE_GAS_*)',
+      regex: /VITE_GAS_/i,
+    },
+    {
+      name: 'Smart Closet 識別子 (smart-closet / Smart Closet 等)',
+      regex: new RegExp(['smart', 'closet'].join('[-_\\s]?'), 'i'),
+    },
+  ];
+
+  const foundErrors: string[] = [];
+
+  function checkContent(filePath: string): void {
+    if (!fs.existsSync(filePath)) return;
+    const content = fs.readFileSync(filePath, 'utf8');
+    const lines = content.split('\n');
+
+    lines.forEach((line, index) => {
+      for (const pattern of forbiddenPatterns) {
+        if (pattern.regex.test(line)) {
+          foundErrors.push(
+            `${path.relative(projectRoot, filePath)}:${index + 1} に禁止パターン '${pattern.name}' が含まれています: ${line.trim()}`
+          );
+        }
+      }
+    });
+  }
+
+  function scanDir(dirPath: string): void {
+    if (!fs.existsSync(dirPath)) return;
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        scanDir(fullPath);
+      } else if (entry.isFile()) {
+        checkContent(fullPath);
+      }
+    }
+  }
+
+  for (const dir of targetDirs) {
+    scanDir(path.resolve(projectRoot, dir));
+  }
+  for (const file of targetFiles) {
+    checkContent(path.resolve(projectRoot, file));
+  }
+
+  if (foundErrors.length > 0) {
+    console.error('秘密情報または他アプリ識別子の混入が検出されました:');
+    foundErrors.forEach((err) => console.error(`  - ${err}`));
+    throw new Error(
+      `[verify:data] 秘密情報・他アプリ識別子が ${foundErrors.length} 箇所で検出されました`
+    );
+  }
+
+  console.log('✓ 秘密情報・他アプリ識別子混入防止検査完了: 混入なし (完全分離確認済)');
+}
+
 function main(): void {
   try {
     verifySampleData();
     verifyNoForbiddenComments();
     verifyNoRealPhotosOrData();
     verifyNoDirectLlmApi();
+    verifyNoSecretsOrCrossAppIdentifiers();
     console.log('\n[verify:data] 全ての検証に成功しました (exit 0)');
     process.exit(0);
   } catch (error) {
