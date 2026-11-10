@@ -221,15 +221,40 @@ export function reconcilePhotosWithBottles(options: ReconcilePhotosOptions): Rec
     }
   }
 
-  // 3. 既存の既知 contentHash -> driveFileId マッピングを構築（重複排除用）
+  // 3. 既存の有効な写真から contentHash -> driveFileId マッピングを構築（重複排除用）
+  // 再利用候補は「deleted === false かつ親ボトルの photoIds に属する写真」のみに限定する。
+  // 削除済み写真や親ボトルの photoIds から外された写真の driveFileId（Drive 側でゴミ箱に移動されるもの）を引き継がない。
+  const isPhotoActiveAndBelongsToParent = (
+    photoId: string,
+    bottleId: string,
+    isDeleted: boolean
+  ): boolean => {
+    if (isDeleted) {
+      return false;
+    }
+    const parentBottle = bottleMap.get(bottleId);
+    if (!parentBottle || parentBottle.deleted) {
+      return false;
+    }
+    return parentBottle.photoIds.includes(photoId);
+  };
+
   const knownHashToDriveId = new Map<string, string>();
   for (const meta of rawMergedMetas) {
-    if (meta.driveFileId && meta.contentHash) {
+    if (
+      meta.driveFileId &&
+      meta.contentHash &&
+      isPhotoActiveAndBelongsToParent(meta.id, meta.bottleId, meta.deleted)
+    ) {
       knownHashToDriveId.set(meta.contentHash, meta.driveFileId);
     }
   }
   for (const lp of localPhotos) {
-    if (lp.driveFileId && lp.contentHash) {
+    if (
+      lp.driveFileId &&
+      lp.contentHash &&
+      isPhotoActiveAndBelongsToParent(lp.id, lp.bottleId, false)
+    ) {
       knownHashToDriveId.set(lp.contentHash, lp.driveFileId);
     }
   }

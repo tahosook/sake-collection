@@ -324,6 +324,97 @@ describe('同期マージ純粋ドメインロジック (PR #11)', () => {
       expect(res.photosToUpload).not.toContain(p2Id);
     });
 
+    it('削除済み写真や親ボトルから外された写真と同じ contentHash を持つ有効な写真が driveFileId を引き継がず、新規アップロード対象になること', () => {
+      const b1Id = '00000000-0000-4000-8000-000000000001';
+      const b2Id = '00000000-0000-4000-8000-000000000002';
+      const pDeletedId = '11111111-0000-4000-8000-000000000001';
+      const pActiveId = '11111111-0000-4000-8000-000000000002';
+      const commonHash = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+
+      // ボトル b1 は削除済み、または pDeletedId を保持していない
+      const b1 = createTestBottle({ id: b1Id, photoIds: [], deleted: false });
+      // ボトル b2 は有効で pActiveId を保持
+      const b2 = createTestBottle({ id: b2Id, photoIds: [pActiveId], deleted: false });
+
+      // 削除済み（または外された）写真：過去の driveFileId を持っている
+      const pDeleted = createTestPhotoMeta({
+        id: pDeletedId,
+        bottleId: b1Id,
+        contentHash: commonHash,
+        driveFileId: 'drive-trashed-file-999',
+        deleted: true,
+      });
+
+      // 新しい有効な写真：同一画像（同じ contentHash）だが driveFileId 未確定でローカルにデータあり
+      const pActive = createTestPhotoRecord({
+        id: pActiveId,
+        bottleId: b2Id,
+        contentHash: commonHash,
+        driveFileId: null,
+      });
+
+      const res = reconcilePhotosWithBottles({
+        mergedBottles: [b1, b2],
+        localPhotos: [pActive],
+        remotePhotoMetas: [pDeleted],
+      });
+
+      // 削除済み写真の driveFileId は引き継がれない（重複排除マップに登録されない）
+      expect(res.deduplicatedDriveFileIds[pActiveId]).toBeUndefined();
+      const metaActive = res.reconciledPhotoMetas.find((p) => p.id === pActiveId);
+      expect(metaActive?.driveFileId).toBeNull();
+
+      // アップロード対象として判定されること
+      expect(res.photosToUpload).toContain(pActiveId);
+    });
+
+    it('ローカル写真であっても親ボトルの photoIds から外された写真の driveFileId は再利用されないこと', () => {
+      const b1Id = '00000000-0000-4000-8000-000000000001';
+      const b2Id = '00000000-0000-4000-8000-000000000002';
+      const pRemovedId = '11111111-0000-4000-8000-000000000001';
+      const pActiveId = '11111111-0000-4000-8000-000000000002';
+      const commonHash = 'cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe';
+
+      // b1 から pRemovedId は外されている
+      const b1 = createTestBottle({ id: b1Id, photoIds: [], deleted: false });
+      const b2 = createTestBottle({ id: b2Id, photoIds: [pActiveId], deleted: false });
+
+      // ローカル photos ストアには物理的に残っているが親ボトルの photoIds から外れた写真
+      const pRemovedLocal = createTestPhotoRecord({
+        id: pRemovedId,
+        bottleId: b1Id,
+        contentHash: commonHash,
+        driveFileId: 'drive-removed-file-888',
+      });
+
+      // 新しい有効な写真
+      const pActive = createTestPhotoRecord({
+        id: pActiveId,
+        bottleId: b2Id,
+        contentHash: commonHash,
+        driveFileId: null,
+      });
+
+      const res = reconcilePhotosWithBottles({
+        mergedBottles: [b1, b2],
+        localPhotos: [pRemovedLocal, pActive],
+        remotePhotoMetas: [
+          createTestPhotoMeta({
+            id: pRemovedId,
+            bottleId: b1Id,
+            contentHash: commonHash,
+            driveFileId: 'drive-removed-file-888',
+          }),
+        ],
+      });
+
+      // 外された写真の driveFileId は引き継がれない
+      expect(res.deduplicatedDriveFileIds[pActiveId]).toBeUndefined();
+      const metaActive = res.reconciledPhotoMetas.find((p) => p.id === pActiveId);
+      expect(metaActive?.driveFileId).toBeNull();
+      expect(res.photosToUpload).toContain(pActiveId);
+    });
+
     it('アップロード要否とダウンロード要否が正確に判定されること', () => {
       const b1Id = '00000000-0000-4000-8000-000000000001';
       const pUploadId = '11111111-0000-4000-8000-000000000001';
