@@ -452,38 +452,65 @@ function verifyNoDirectLlmApi(): void {
  * 5. 秘密情報（合言葉・実デプロイURL）および他アプリ（Smart Closet）識別子の混入防止検査
  *
  * 設計: docs/step3-4-design.md §2(5), PR #12
- * - 実 GAS デプロイ URL (script.google.com/macros/s/) のハードコード禁止
- * - クライアント埋め込み環境変数 (VITE_GAS_*) の定義禁止
- * - Smart Closet の識別子の平文混入禁止
+ * レビュー指摘対応 (PR #12):
+ * - スキャン範囲をリポジトリルートからの再帰走査に拡張 (生成物・依存物のみ除外)
+ * - docs／tests／scripts／.github／ルート設定ファイル等を全域走査
+ * - 実 GAS デプロイ URL (script.google.com/macros/s/) の全域禁止
+ * - クライアント埋め込み環境変数 (VITE_GAS_*) の全域禁止
+ * - Smart Closet リソース識別子 (smart-closet / smart_closet / smartcloset / SMART_CLOSET) の全域禁止
+ * - コード・テスト・ワークフロー・設定ファイル等への Smart Closet 言及の混入禁止
  */
 function verifyNoSecretsOrCrossAppIdentifiers(): void {
   console.log('--- 5. 秘密情報・他アプリ識別子混入防止検査 ---');
   const projectRoot = process.cwd();
+  const currentScriptPath = path.resolve(__filename);
 
-  // 走査対象ディレクトリ（コード、関数、GAS、公開アセット）
-  const targetDirs = ['src', 'functions', 'gas', 'public'];
-  const targetFiles = [
-    'eslint.config.js',
-    'vite.config.ts',
-    'tailwind.config.js',
-    'postcss.config.js',
-    'index.html',
-    'package.json',
-  ];
+  // 明示的な除外ディレクトリ
+  const ignoredDirs = new Set(['node_modules', '.git', 'dist', '.gemini']);
 
   // 検出パターン
-  const forbiddenPatterns: Array<{ name: string; regex: RegExp }> = [
+  const forbiddenPatterns: Array<{
+    name: string;
+    regex: RegExp;
+    isForbiddenForFile: (relativePath: string) => boolean;
+  }> = [
     {
-      name: '実 GAS デプロイ URL (script.google.com/macros/s/)',
-      regex: new RegExp(['script', 'google', 'com/macros/s/'].join('.')),
+      name: '実 GAS デプロイ URL (script.google.com/macros/s/.../exec)',
+      // 実際のデプロイ ID が続く実 URL を検出（docs を含むリポジトリ全域で禁止）
+      regex: new RegExp(['https?:\\/\\/script', 'google', 'com\\/macros\\/s\\/[A-Za-z0-9_-]{10,}'].join('.')),
+      isForbiddenForFile: () => true,
     },
     {
       name: 'クライアント埋め込み GAS 環境変数 (VITE_GAS_*)',
+      // docs (設計仕様文) 以外（コード・設定・テスト・ワークフロー等）で禁止
       regex: /VITE_GAS_/i,
+      isForbiddenForFile: (relPath: string) => {
+        const isDoc =
+          relPath === 'AGENTS.md' ||
+          relPath === 'README.md' ||
+          relPath.startsWith('docs' + path.sep) ||
+          relPath.startsWith('docs/');
+        return !isDoc;
+      },
     },
     {
-      name: 'Smart Closet 識別子 (smart-closet / Smart Closet 等)',
-      regex: new RegExp(['smart', 'closet'].join('[-_\\s]?'), 'i'),
+      name: 'Smart Closet リソース識別子 (smart-closet / smart_closet / smartcloset / SMART_CLOSET)',
+      // docs を含むリポジトリ全域で禁止
+      regex: new RegExp(['smart', 'closet'].join('[-_]?'), 'i'),
+      isForbiddenForFile: () => true,
+    },
+    {
+      name: 'Smart Closet 言及 (コード・設定・テスト・CIへの混入)',
+      // ドキュメント (docs/, AGENTS.md, README.md) 以外（ソース・設定・テスト・ワークフロー等）で禁止
+      regex: new RegExp(['smart', 'closet'].join('\\s+'), 'i'),
+      isForbiddenForFile: (relPath: string) => {
+        const isDoc =
+          relPath === 'AGENTS.md' ||
+          relPath === 'README.md' ||
+          relPath.startsWith('docs' + path.sep) ||
+          relPath.startsWith('docs/');
+        return !isDoc;
+      },
     },
   ];
 
@@ -491,39 +518,53 @@ function verifyNoSecretsOrCrossAppIdentifiers(): void {
 
   function checkContent(filePath: string): void {
     if (!fs.existsSync(filePath)) return;
-    const content = fs.readFileSync(filePath, 'utf8');
-    const lines = content.split('\n');
+    const relativePath = path.relative(projectRoot, filePath);
 
+    // バイナリ・画像等は除外 (拡張子チェック)
+    const ext = path.extname(filePath).toLowerCase();
+    const binaryExtensions = ['.jpg', '.jpeg', '.png', '.webp', '.ico', '.pdf', '.zip', '.tar', '.gz'];
+    if (binaryExtensions.includes(ext)) {
+      return;
+    }
+
+    let content: string;
+    try {
+      content = fs.readFileSync(filePath, 'utf8');
+    } catch {
+      // 読み込み不可ファイルはスキップ
+      return;
+    }
+
+    const lines = content.split('\n');
     lines.forEach((line, index) => {
       for (const pattern of forbiddenPatterns) {
-        if (pattern.regex.test(line)) {
+        if (pattern.isForbiddenForFile(relativePath) && pattern.regex.test(line)) {
           foundErrors.push(
-            `${path.relative(projectRoot, filePath)}:${index + 1} に禁止パターン '${pattern.name}' が含まれています: ${line.trim()}`
+            `${relativePath}:${index + 1} に禁止パターン '${pattern.name}' が含まれています: ${line.trim()}`
           );
         }
       }
     });
   }
 
-  function scanDir(dirPath: string): void {
-    if (!fs.existsSync(dirPath)) return;
-    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  function scan(currentDir: string): void {
+    const entries = fs.readdirSync(currentDir, { withFileTypes: true });
     for (const entry of entries) {
-      const fullPath = path.join(dirPath, entry.name);
+      const fullPath = path.join(currentDir, entry.name);
       if (entry.isDirectory()) {
-        scanDir(fullPath);
+        if (!ignoredDirs.has(entry.name)) {
+          scan(fullPath);
+        }
       } else if (entry.isFile()) {
+        if (path.resolve(fullPath) === currentScriptPath) {
+          continue; // 自身は除外
+        }
         checkContent(fullPath);
       }
     }
   }
 
-  for (const dir of targetDirs) {
-    scanDir(path.resolve(projectRoot, dir));
-  }
-  for (const file of targetFiles) {
-    checkContent(path.resolve(projectRoot, file));
-  }
+  scan(projectRoot);
 
   if (foundErrors.length > 0) {
     console.error('秘密情報または他アプリ識別子の混入が検出されました:');
