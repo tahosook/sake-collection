@@ -182,12 +182,21 @@ Cloudflare ダッシュボードにログインし、本番およびプレビュ
    - **Configure rules**:
      - **Selector**: `Emails`
      - **Value**: `<あなたのGoogleアカウントのメールアドレス>`（リポジトリには記載しない）
-5. **Pages プロジェクト側の Preview Deployment Access Policy 設定・確認**:
-   - Cloudflare ダッシュボード > **Workers & Pages** > **`sake-collection`** を開きます。
-   - **Settings** > **General** を開き、画面をスクロールして **Access policy** セクションを確認します。
-   - **「Enable access policy」**（プレビューデプロイへのアクセス制御）をクリックして有効化します（すでに有効化されている場合は「Manage」からポリシー内容を確認）。
-   - プレビュー用に適用されるポリシーのルールが、本人のメールアドレス（Selector: `Emails`）のみを許可する設定になっていることを確認・調整します。
-   - ※この設定により、Zero Trust 側のワイルドカードドメイン保護に加えて、Pages が生成するハッシュ付きの個別 Preview Deployment URL（例: `<deployment-hash>.sake-collection.pages.dev`）に対するダイレクトアクセスも確実に Cloudflare Access で遮断・保護されます。
+5. **Pages プロジェクト側の Preview Deployment Access Policy 設定と既知の問題（Known issues）への対応**:
+   - Cloudflare Pages のプレビュー保護機能には、有効化時に生成されるポリシー設定と本番側の保護設定が衝突する既知の挙動（Known issues）があります。本番ドメインとプレビュー環境の両方を確実に保護するため、以下の手順で設定・調整します：
+     1. **Enable access policy の初期有効化**:
+        - Cloudflare ダッシュボード > **Workers & Pages** > **`sake-collection`** > **Settings** > **General** を開き、画面下部の **Access policy** セクションで **「Enable access policy」**（プレビューデプロイへのアクセス制御）をクリックして有効化します。
+     2. **自動生成された Preview ポリシーの「*」サブドメイン削除**:
+        - 有効化後に Zero Trust > **Access** > **Applications** を開くと、Pages のプレビュー用アプリケーション（ポリシー）が自動生成されています。
+        - その設定を開き、Application domain に含まれているワイルドカード **`*` サブドメイン** を削除して保存します（この `*` が残っていると本番ドメインの保護と干渉・衝突するため）。
+     3. **Pages 側でのポリシー再選択**:
+        - 再度 Workers & Pages > **`sake-collection`** > **Settings** > **General** > **Access policy** に戻り、**「Enable access policy」** を選択し直します（または再適用します）。
+     4. **2つのポリシーの存在と本人限定アクセスの確認**:
+        - Zero Trust > **Access** > **Applications** にて、以下の **2つのポリシー（アプリケーション）** が正しく独立して存在することを確認します：
+          - **`*.pages.dev` 用アプリケーション**: 本番ドメイン（`sake-collection.pages.dev`）およびブランチプレビュー全域用
+          - **`*.sake-collection.pages.dev` 用（Preview Deployment）アプリケーション**: Pages が生成するハッシュ付き個別プレビュー URL 用
+        - 両方のアプリケーションの Policy ルールが、**本人の Google メールアドレス（Selector: `Emails`）のみ許可** になっていることを確認します。
+   - ※この手順により、本番 URL だけでなく、個別コミットや PR ごとに生成されるハッシュ付き Preview Deployment URL（例: `<deployment-hash>.sake-collection.pages.dev`）へのダイレクトアクセスも漏れなく Cloudflare Access で確実に保護されます。
 6. **Audience Tag (AUD) の取得**:
    - Zero Trust > Access > Applications で作成した `sake-collection` アプリケーションの **Overview** 画面を開きます。
    - 画面内に表示されている **Audience Tag (AUD)**（英数字の長いハッシュ文字列）をコピーして控えます。
