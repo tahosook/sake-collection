@@ -779,6 +779,25 @@ export async function saveSyncDownloadCache(
 }
 
 /**
+ * 一時ダウンロードキャッシュを完全上書き・保存する（無効なキャッシュの破棄用）
+ */
+export async function setSyncDownloadCache(
+  photos: PhotoRecord[],
+  nowIso: string = new Date().toISOString()
+): Promise<void> {
+  const db = await getDb();
+  if (photos.length === 0) {
+    await db.delete('meta', 'syncDownloadCache');
+  } else {
+    await db.put('meta', {
+      key: 'syncDownloadCache',
+      value: photos,
+      updatedAt: nowIso,
+    });
+  }
+}
+
+/**
  * 一時ダウンロードキャッシュをクリアする
  */
 export async function clearSyncDownloadCache(): Promise<void> {

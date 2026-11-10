@@ -18,6 +18,7 @@ import {
   getLastSyncAt,
   loadSampleData,
   getSyncDownloadCache,
+  saveSyncDownloadCache,
 } from '../src/storage/db';
 import { createNewBottle } from '../src/domain/bottleUtils';
 import { BottleRecord, PhotoRecord, SyncConnectionConfig } from '../src/types/sake';
@@ -426,6 +427,155 @@ describe('同期クライアントサービス統合テスト (PR #13)', () => {
       // ローカル photos に両方の写真が保存されていること
       const photosInDb = await getAllPhotos();
       expect(photosInDb).toHaveLength(2);
+    });
+
+    it('キャッシュ検証: 今回の photosToDownload に含まれない古いキャッシュは確定に混ざらず破棄されること', async () => {
+      await saveSyncConfig(dummyConfig);
+
+      const b1 = createTestBottle({
+        id: '00000000-0000-4000-8000-000000000001',
+        photoIds: ['11111111-0000-4000-8000-000000000001'],
+      });
+
+      const p1Target = createTestPhotoRecord({
+        id: '11111111-0000-4000-8000-000000000001',
+        bottleId: b1.id,
+        driveFileId: 'drive-target-1',
+      });
+
+      // 前回の失敗等でキャッシュに残った、今回の同期対象外の写真（リモートで削除されたか別ボトル）
+      const pOldOrphan = createTestPhotoRecord({
+        id: '11111111-0000-4000-8000-000000000099',
+        bottleId: '00000000-0000-4000-8000-000000000099',
+        driveFileId: 'drive-orphan-99',
+        contentHash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      });
+
+      await saveSyncDownloadCache([pOldOrphan]);
+
+      globalThis.fetch = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+        const body = JSON.parse(init?.body as string) as { action: string; photoIds?: string[] };
+
+        if (body.action === 'sync_metadata') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              ok: true,
+              bottles: [b1],
+              photoMetas: [{ ...p1Target, dataUrl: undefined }],
+              photosToUpload: [],
+              syncedAt: '2026-11-10T12:00:00.000Z',
+            }),
+          } as Response);
+        }
+
+        if (body.action === 'download_photos') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              ok: true,
+              photos: [p1Target],
+            }),
+          } as Response);
+        }
+
+        return Promise.reject(new Error(`Unexpected action: ${body.action}`));
+      });
+
+      const res = await executeFullSync({ config: dummyConfig });
+      expect(res.success).toBe(true);
+
+      // p1Target のみが photos ストアに保存され、pOldOrphan は混入しないこと
+      const photosInDb = await getAllPhotos(true);
+      expect(photosInDb).toHaveLength(1);
+      expect(photosInDb[0]?.id).toBe(p1Target.id);
+
+      // キャッシュはクリアされていること
+      const cacheAfter = await getSyncDownloadCache();
+      expect(cacheAfter).toHaveLength(0);
+    });
+
+    it('キャッシュ検証: contentHash / bottleId / driveFileId が不一致のキャッシュは破棄され再ダウンロードされること', async () => {
+      await saveSyncConfig(dummyConfig);
+
+      const b1 = createTestBottle({
+        id: '00000000-0000-4000-8000-000000000001',
+        photoIds: ['11111111-0000-4000-8000-000000000001'],
+      });
+
+      // キャッシュにある古い写真（古い contentHash と古い dataUrl）
+      const p1StaleCache = createTestPhotoRecord({
+        id: '11111111-0000-4000-8000-000000000001',
+        bottleId: b1.id,
+        driveFileId: 'drive-target-1',
+        contentHash: '0000000000000000000000000000000000000000000000000000000000000001',
+        dataUrl: 'data:image/jpeg;base64,c3RhbGU=',
+      });
+
+      // リモートの最新写真メタデータ（新しい contentHash）
+      const p1FreshMeta = {
+        ...p1StaleCache,
+        contentHash: '0000000000000000000000000000000000000000000000000000000000000002',
+        dataUrl: undefined,
+      };
+
+      // リモートからダウンロードされる最新写真
+      const p1FreshPhoto = {
+        ...p1StaleCache,
+        contentHash: p1FreshMeta.contentHash,
+        dataUrl: 'data:image/jpeg;base64,ZnJlc2g=',
+      };
+
+      await saveSyncDownloadCache([p1StaleCache]);
+
+      const requestedDownloadIds: string[] = [];
+
+      globalThis.fetch = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+        const body = JSON.parse(init?.body as string) as { action: string; photoIds?: string[] };
+
+        if (body.action === 'sync_metadata') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              ok: true,
+              bottles: [b1],
+              photoMetas: [p1FreshMeta],
+              photosToUpload: [],
+              syncedAt: '2026-11-10T12:00:00.000Z',
+            }),
+          } as Response);
+        }
+
+        if (body.action === 'download_photos') {
+          if (body.photoIds) {
+            requestedDownloadIds.push(...body.photoIds);
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              ok: true,
+              photos: [p1FreshPhoto],
+            }),
+          } as Response);
+        }
+
+        return Promise.reject(new Error(`Unexpected action: ${body.action}`));
+      });
+
+      const res = await executeFullSync({ config: dummyConfig });
+      expect(res.success).toBe(true);
+
+      // 古いキャッシュは再利用されず、GAS にダウンロード要求されたこと
+      expect(requestedDownloadIds).toEqual([p1StaleCache.id]);
+
+      // DB に保存された写真は最新のものであること
+      const savedPhoto = await getPhoto(p1StaleCache.id);
+      expect(savedPhoto?.contentHash).toBe(p1FreshMeta.contentHash);
+      expect(savedPhoto?.dataUrl).toBe('data:image/jpeg;base64,ZnJlc2g=');
     });
   });
 });

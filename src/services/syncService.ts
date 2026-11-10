@@ -32,6 +32,7 @@ import {
   updatePhotoDriveFileId,
   getSyncDownloadCache,
   saveSyncDownloadCache,
+  setSyncDownloadCache,
   commitSyncResultToDb,
   getSyncConfig,
   saveSyncConfig,
@@ -348,12 +349,42 @@ export async function executeFullSync(options: ExecuteFullSyncOptions = {}): Pro
   const photosToDownload = reconciled.photosToDownload;
   let downloadedCount = 0;
 
-  // 既存のダウンロードキャッシュ (途中失敗時のレジューム用)
-  const cachedPhotos = await getSyncDownloadCache();
-  const cachedPhotoMap = new Map<string, PhotoRecord>(cachedPhotos.map((p) => [p.id, p]));
+  // リモートメタデータマップ (contentHash, bottleId, driveFileId 照合用)
+  const remoteMetaMap = new Map<string, PhotoSyncMeta>(
+    metaResponse.photoMetas.map((m) => [m.id, m])
+  );
 
-  // まだダウンロードしていない写真 ID
-  const pendingDownloadIds = photosToDownload.filter((id) => !cachedPhotoMap.has(id));
+  // 既存のダウンロードキャッシュ (途中失敗時のレジューム用) の精査
+  const cachedPhotos = await getSyncDownloadCache();
+  const validCachedPhotoMap = new Map<string, PhotoRecord>();
+  let hasDiscardedCache = false;
+
+  const photosToDownloadSet = new Set(photosToDownload);
+
+  for (const cp of cachedPhotos) {
+    const meta = remoteMetaMap.get(cp.id);
+    const isTarget = photosToDownloadSet.has(cp.id);
+    const isMetaMatch =
+      meta !== undefined &&
+      meta.contentHash === cp.contentHash &&
+      meta.bottleId === cp.bottleId &&
+      meta.driveFileId === cp.driveFileId;
+
+    if (isTarget && isMetaMatch) {
+      validCachedPhotoMap.set(cp.id, cp);
+    } else {
+      // 今回のダウンロード対象外、または contentHash / bottleId / driveFileId が不一致のキャッシュは破棄
+      hasDiscardedCache = true;
+    }
+  }
+
+  // 不一致・不要なキャッシュが存在した場合はキャッシュストアを健全化
+  if (hasDiscardedCache) {
+    await setSyncDownloadCache(Array.from(validCachedPhotoMap.values()));
+  }
+
+  // まだダウンロードしていない写真 ID (キャッシュ不一致で破棄されたものを含む)
+  const pendingDownloadIds = photosToDownload.filter((id) => !validCachedPhotoMap.has(id));
 
   if (photosToDownload.length > 0) {
     const alreadyCachedCount = photosToDownload.length - pendingDownloadIds.length;
@@ -397,7 +428,7 @@ export async function executeFullSync(options: ExecuteFullSyncOptions = {}): Pro
           throw new Error(errMsg);
         }
         validatedPhotos.push(valRes.data);
-        cachedPhotoMap.set(valRes.data.id, valRes.data);
+        validCachedPhotoMap.set(valRes.data.id, valRes.data);
       }
 
       // チャンク成功ごとにキャッシュへ保存 (レジューム用)
@@ -418,16 +449,18 @@ export async function executeFullSync(options: ExecuteFullSyncOptions = {}): Pro
   // ----------------------------------------------------
   notify('phase4_commit', 'データを確定中...');
 
-  const finalPhotosToUpsert: PhotoRecord[] = Array.from(cachedPhotoMap.values());
-
-  // ダウンロード対象の写真がすべて揃っているか最終確認
+  // 確定対象は今回の photosToDownload に含まれる写真だけに絞る
+  const finalPhotosToUpsert: PhotoRecord[] = [];
   for (const pid of photosToDownload) {
-    if (!cachedPhotoMap.has(pid)) {
+    const photo = validCachedPhotoMap.get(pid);
+    if (!photo) {
       const errMsg = `不足写真のダウンロードが不完全です (photoId: ${pid})`;
       notify('error', errMsg);
       throw new Error(errMsg);
     }
+    finalPhotosToUpsert.push(photo);
   }
+
 
   await commitSyncResultToDb({
     bottles: metaResponse.bottles,
