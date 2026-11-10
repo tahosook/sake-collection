@@ -95,14 +95,14 @@ export const BottleDetailModal: React.FC<BottleDetailModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4 overflow-y-auto"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4 overflow-hidden sm:overflow-y-auto"
       role="dialog"
       aria-modal="true"
       aria-label="ボトル詳細"
     >
-      <div className="bg-white w-full max-w-lg min-h-screen sm:min-h-0 sm:max-h-[92vh] sm:rounded-3xl flex flex-col shadow-2xl overflow-hidden animate-in fade-in duration-200">
+      <div className="bg-white w-full max-w-lg h-full h-dvh max-h-dvh sm:h-auto sm:max-h-[92vh] sm:rounded-3xl flex flex-col shadow-2xl overflow-hidden animate-in fade-in duration-200">
         {/* モーダルヘッダー */}
-        <div className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-stone-200 px-4 py-3 flex items-center justify-between">
+        <div className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-stone-200 px-4 py-3 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
             <CategoryBadge category={bottle.category} />
             <StatusBadge status={bottle.status} />
@@ -150,7 +150,7 @@ export const BottleDetailModal: React.FC<BottleDetailModalProps> = ({
         </div>
 
         {/* スクロール可能コンテンツ */}
-        <div className="p-4 sm:p-6 space-y-6 overflow-y-auto flex-1">
+        <div className="p-4 sm:p-6 pb-8 sm:pb-6 space-y-6 overflow-y-auto flex-1">
           {/* 1. 写真ビューア */}
           <div className="space-y-2">
             <div className="relative aspect-square w-full bg-stone-100 rounded-2xl overflow-hidden border border-stone-200 flex items-center justify-center">
@@ -491,7 +491,7 @@ export const BottleDetailModal: React.FC<BottleDetailModalProps> = ({
         </div>
 
         {/* モーダルフッター */}
-        <div className="p-3 bg-stone-50 border-t border-stone-200 flex gap-2">
+        <div className="p-3 bg-stone-50 border-t border-stone-200 flex gap-2 shrink-0">
           <button
             type="button"
             onClick={onClose}
