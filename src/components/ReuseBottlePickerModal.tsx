@@ -50,14 +50,14 @@ export const ReuseBottlePickerModal: React.FC<ReuseBottlePickerModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4 overflow-y-auto"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4 overflow-hidden sm:overflow-y-auto"
       role="dialog"
       aria-modal="true"
       aria-label="流用元の銘柄を選択"
     >
-      <div className="bg-white w-full max-w-lg min-h-screen sm:min-h-0 sm:max-h-[90vh] sm:rounded-3xl flex flex-col shadow-2xl overflow-hidden animate-in fade-in duration-200">
+      <div className="bg-white w-full max-w-lg h-full h-dvh max-h-dvh sm:h-auto sm:max-h-[90vh] sm:rounded-3xl flex flex-col shadow-2xl overflow-hidden animate-in fade-in duration-200">
         {/* ヘッダー */}
-        <div className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-stone-200 px-4 py-3 flex items-center justify-between">
+        <div className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-stone-200 px-4 py-3 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
             <div className="p-1.5 bg-stone-100 rounded-lg text-stone-700">
               <ArrowPathIcon className="w-4 h-4" />
@@ -82,7 +82,7 @@ export const ReuseBottlePickerModal: React.FC<ReuseBottlePickerModalProps> = ({
         </div>
 
         {/* コントロール部（検索・カテゴリ・写真引き継ぎ設定） */}
-        <div className="p-4 bg-stone-50 border-b border-stone-200 space-y-3">
+        <div className="p-4 bg-stone-50 border-b border-stone-200 space-y-3 shrink-0">
           {/* 写真引き継ぎトグル */}
           <div className="p-3 bg-white rounded-xl border border-stone-200 shadow-sm">
             <label className="min-h-touch flex items-center gap-2.5 cursor-pointer select-none">
@@ -150,7 +150,7 @@ export const ReuseBottlePickerModal: React.FC<ReuseBottlePickerModalProps> = ({
         </div>
 
         {/* ボトル一覧 */}
-        <div className="p-4 space-y-2.5 overflow-y-auto flex-1">
+        <div className="p-4 pb-8 sm:pb-4 space-y-2.5 overflow-y-auto flex-1">
           {filteredBottles.length === 0 ? (
             <div className="py-12 text-center space-y-2 text-stone-400">
               <p className="text-xs">流用できるお酒が見つかりませんでした。</p>
@@ -215,7 +215,7 @@ export const ReuseBottlePickerModal: React.FC<ReuseBottlePickerModalProps> = ({
         </div>
 
         {/* フッター */}
-        <div className="p-3 bg-stone-50 border-t border-stone-200">
+        <div className="p-3 bg-stone-50 border-t border-stone-200 shrink-0">
           <button
             type="button"
             onClick={onClose}

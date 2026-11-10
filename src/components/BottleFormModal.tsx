@@ -681,14 +681,14 @@ export const BottleFormModal: React.FC<BottleFormModalProps> = ({
   return (
     <>
       <div
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4 overflow-y-auto"
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4 overflow-hidden sm:overflow-y-auto"
         role="dialog"
         aria-modal="true"
         aria-label={isEditing ? 'お酒の編集' : 'お酒の登録'}
       >
-        <div className="bg-white w-full max-w-lg min-h-screen sm:min-h-0 sm:max-h-[92vh] sm:rounded-3xl flex flex-col shadow-2xl overflow-hidden animate-in fade-in duration-200">
+        <div className="bg-white w-full max-w-lg h-full h-dvh max-h-dvh sm:h-auto sm:max-h-[92vh] sm:rounded-3xl flex flex-col shadow-2xl overflow-hidden animate-in fade-in duration-200">
           {/* ヘッダー */}
-          <div className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-stone-200 px-4 py-3 flex items-center justify-between">
+          <div className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-stone-200 px-4 py-3 flex items-center justify-between shrink-0">
             <div className="flex items-center gap-2">
               <h2 className="text-base sm:text-lg font-bold text-stone-900">
                 {isEditing ? 'お酒を編集' : 'お酒を登録'}
@@ -715,7 +715,7 @@ export const BottleFormModal: React.FC<BottleFormModalProps> = ({
           </div>
 
           {/* フォーム入力部 */}
-          <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-5 overflow-y-auto flex-1">
+          <form onSubmit={handleSubmit} className="p-4 sm:p-6 pb-8 sm:pb-6 space-y-5 overflow-y-auto flex-1">
             {/* エラー表示 */}
             {errorMessage && (
               <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-xl font-medium animate-in fade-in duration-200">

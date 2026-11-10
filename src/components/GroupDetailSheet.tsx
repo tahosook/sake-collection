@@ -20,14 +20,14 @@ export const GroupDetailSheet: React.FC<GroupDetailSheetProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-0 sm:p-4 transition-opacity"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-sm p-0 sm:p-4 transition-opacity overflow-hidden sm:overflow-y-auto"
       role="dialog"
       aria-modal="true"
       aria-label="同一銘柄の個別一覧"
     >
-      <div className="bg-white w-full max-w-lg rounded-t-3xl sm:rounded-3xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom-6 duration-200">
+      <div className="bg-white w-full max-w-lg rounded-t-3xl sm:rounded-3xl max-h-[85vh] max-h-[85dvh] flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom-6 duration-200">
         {/* シートヘッダー */}
-        <div className="p-4 sm:p-5 border-b border-stone-200 flex items-start justify-between gap-3 bg-stone-50">
+        <div className="p-4 sm:p-5 border-b border-stone-200 flex items-start justify-between gap-3 bg-stone-50 shrink-0">
           <div>
             <div className="flex items-center gap-2 mb-1.5 flex-wrap">
               <CategoryBadge category={group.category} />
@@ -63,7 +63,7 @@ export const GroupDetailSheet: React.FC<GroupDetailSheetProps> = ({
         </div>
 
         {/* 個体リスト */}
-        <div className="p-4 space-y-3 overflow-y-auto flex-1">
+        <div className="p-4 pb-8 sm:pb-4 space-y-3 overflow-y-auto flex-1">
           {group.bottles.map((bottle, index) => {
             const openedDays = calculateOpenedDays(bottle);
             return (
