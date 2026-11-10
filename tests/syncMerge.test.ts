@@ -415,6 +415,57 @@ describe('同期マージ純粋ドメインロジック (PR #11)', () => {
       expect(res.photosToUpload).toContain(pActiveId);
     });
 
+    it('deleted: true で親ボトルの photoIds に含まれるローカル写真と同じ contentHash の有効な別写真が、driveFileId を引き継がず photosToUpload に入ること', () => {
+      const b1Id = '00000000-0000-4000-8000-000000000001';
+      const b2Id = '00000000-0000-4000-8000-000000000002';
+      const pDeletedLocalId = '11111111-0000-4000-8000-000000000001';
+      const pActiveId = '11111111-0000-4000-8000-000000000002';
+      const commonHash = '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
+
+      // b1 は有効で、photoIds に pDeletedLocalId が含まれている
+      const b1 = createTestBottle({ id: b1Id, photoIds: [pDeletedLocalId], deleted: false });
+      // b2 も有効で、photoIds に pActiveId が含まれている
+      const b2 = createTestBottle({ id: b2Id, photoIds: [pActiveId], deleted: false });
+
+      // deleted: true で親ボトルの photoIds に含まれるローカル写真
+      const pDeletedLocal = createTestPhotoRecord({
+        id: pDeletedLocalId,
+        bottleId: b1Id,
+        contentHash: commonHash,
+        driveFileId: 'drive-deleted-local-777',
+        deleted: true,
+      });
+
+      // 有効な別写真（同一 contentHash、driveFileId 未設定、ローカルにデータあり）
+      const pActive = createTestPhotoRecord({
+        id: pActiveId,
+        bottleId: b2Id,
+        contentHash: commonHash,
+        driveFileId: null,
+        deleted: false,
+      });
+
+      const res = reconcilePhotosWithBottles({
+        mergedBottles: [b1, b2],
+        localPhotos: [pDeletedLocal, pActive],
+        remotePhotoMetas: [
+          createTestPhotoMeta({
+            id: pDeletedLocalId,
+            bottleId: b1Id,
+            contentHash: commonHash,
+            driveFileId: 'drive-deleted-local-777',
+            deleted: true,
+          }),
+        ],
+      });
+
+      // deleted: true のローカル写真の driveFileId は引き継がれない
+      expect(res.deduplicatedDriveFileIds[pActiveId]).toBeUndefined();
+      const metaActive = res.reconciledPhotoMetas.find((p) => p.id === pActiveId);
+      expect(metaActive?.driveFileId).toBeNull();
+      expect(res.photosToUpload).toContain(pActiveId);
+    });
+
     it('アップロード要否とダウンロード要否が正確に判定されること', () => {
       const b1Id = '00000000-0000-4000-8000-000000000001';
       const pUploadId = '11111111-0000-4000-8000-000000000001';

@@ -253,7 +253,7 @@ export function reconcilePhotosWithBottles(options: ReconcilePhotosOptions): Rec
     if (
       lp.driveFileId &&
       lp.contentHash &&
-      isPhotoActiveAndBelongsToParent(lp.id, lp.bottleId, false)
+      isPhotoActiveAndBelongsToParent(lp.id, lp.bottleId, lp.deleted)
     ) {
       knownHashToDriveId.set(lp.contentHash, lp.driveFileId);
     }
