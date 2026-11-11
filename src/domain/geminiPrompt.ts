@@ -10,6 +10,12 @@ import {
 import { CATEGORY_ATTRIBUTE_LABELS, isSakeCategory } from './categories';
 import { isValidCalendarDate } from './validation';
 import { getTodayDateString, CreateBottleInput } from './bottleUtils';
+import { NormalizedCropBox } from './photoUtils';
+
+/**
+ * Gemini 配列一括取り込みの上限件数 (最大6本)
+ */
+export const MAX_GEMINI_BATCH_SIZE = 6;
 
 /**
  * 種類別の解説の軸定義（正本: docs/step2-design.md §2）
@@ -98,6 +104,13 @@ export function buildGeminiConsultationPrompt(options: {
 
 ${categoryHintText}
 
+【複数のお酒が写っている場合（最大6本まで）】
+写真に複数のお酒が写っている場合は、左（または上）に写っているお酒から順に、下記フォーマットのオブジェクトに「cropBox」を追加したJSON配列（[ { ... }, { ... } ]、最大6本まで）として出力してください。
+- 各要素には、全体写真におけるそのボトル1本分の切り抜き範囲を「cropBox」として必ず含めてください。
+- 座標は画像全体の左上を (0, 0)、右下を (1000, 1000) とする 0〜1000 の整数で、ボトル全体（キャップから底まで）が収まる矩形を指定してください:
+  "cropBox": { "ymin": 上端, "xmin": 左端, "ymax": 下端, "xmax": 右端 }
+- 写真にボトル本体が写っていない場合や1本のみの相談の場合は、"cropBox" は省略または null にしてください。
+
 【出力JSONフォーマット】
 \`\`\`json
 {
@@ -152,10 +165,11 @@ export interface GeminiImportPayload {
   description: SakeDescription | null;
   sources: DescriptionSource[];
   referencePrice: ReferencePriceInfo | null;
+  cropBox?: NormalizedCropBox | null;
 }
 
 /**
- * Gemini 取り込みの検証結果型
+ * Gemini 取り込みの検証結果型（単一オブジェクト用）
  */
 export type GeminiValidationResult =
   | {
@@ -169,6 +183,152 @@ export type GeminiValidationResult =
     };
 
 /**
+ * 切り抜き範囲（cropBox）の座標許容誤差（0..1000 スケール基準で ±10 = 1%）
+ */
+export const CROP_BOX_TOLERANCE = 10;
+
+/**
+ * 切り抜き範囲（cropBox）の最小寸法（元画像の3%以上: 30）
+ */
+export const MIN_CROP_DIMENSION = 30;
+
+/**
+ * 値が有限な数値であるかを判定するガード関数
+ */
+function isFiniteNumber(val: unknown): val is number {
+  return typeof val === 'number' && Number.isFinite(val);
+}
+
+/**
+ * Gemini が出力した切り抜き座標（cropBox）を検証・正規化する純粋関数
+ *
+ * 入力形式:
+ * - オブジェクト: { ymin, xmin, ymax, xmax }
+ * - 配列: [ymin, xmin, ymax, xmax]（要素数ちょうど4）
+ * - 0..1 の小数表現または 0..1000 の整数表現
+ *
+ * 有効条件:
+ * - 各座標が変換前に typeof 'number' かつ Number.isFinite（文字列・真偽値・null・欠落キーは不可）
+ * - 配列形式は要素数がちょうど4
+ * - わずかな丸め誤差（±CROP_BOX_TOLERANCE = ±10）以内の範囲（-10 <= coord <= 1010）に収まっていること（許容内は 0..1000 へクランプ）
+ * - 許容範囲を超える値は不正座標として警告付きで cropBox: null（写真なし）へフォールバック
+ * - 0 <= ymin < ymax <= 1000 かつ 0 <= xmin < xmax <= 1000
+ * - 幅・高さともに MIN_CROP_DIMENSION (30, 元画像の3%) 以上
+ *
+ * 未指定・null は写真なし（cropBox: null, 警告なし）
+ * 不正座標は警告付きで写真なし（cropBox: null）にフォールバック
+ */
+export function validateAndNormalizeCropBox(rawCropBox: unknown): {
+  cropBox: NormalizedCropBox | null;
+  warning?: string;
+} {
+  if (rawCropBox === undefined || rawCropBox === null || rawCropBox === '') {
+    return { cropBox: null };
+  }
+
+  let rawYmin: unknown;
+  let rawXmin: unknown;
+  let rawYmax: unknown;
+  let rawXmax: unknown;
+
+  if (Array.isArray(rawCropBox)) {
+    if (rawCropBox.length !== 4) {
+      return {
+        cropBox: null,
+        warning: '切り抜き範囲（cropBox）の配列形式は要素数が4である必要があります。写真なしで取り込みます。',
+      };
+    }
+    [rawYmin, rawXmin, rawYmax, rawXmax] = rawCropBox;
+  } else if (typeof rawCropBox === 'object' && rawCropBox !== null) {
+    const o = rawCropBox as Record<string, unknown>;
+    rawYmin = o['ymin'];
+    rawXmin = o['xmin'];
+    rawYmax = o['ymax'];
+    rawXmax = o['xmax'];
+  } else {
+    return {
+      cropBox: null,
+      warning: '切り抜き範囲（cropBox）の形式が不正なため、写真なしで取り込みます。',
+    };
+  }
+
+  // 1. 各座標の型と有限性チェック (typeof === 'number' && Number.isFinite)
+  if (
+    !isFiniteNumber(rawYmin) ||
+    !isFiniteNumber(rawXmin) ||
+    !isFiniteNumber(rawYmax) ||
+    !isFiniteNumber(rawXmax)
+  ) {
+    return {
+      cropBox: null,
+      warning: '切り抜き範囲（cropBox）の座標値が有限な数値でなかったため、写真なしで取り込みます。',
+    };
+  }
+
+  let ymin = rawYmin;
+  let xmin = rawXmin;
+  let ymax = rawYmax;
+  let xmax = rawXmax;
+
+  // 2. 0.0〜1.0 の比率表現の検出と 0..1000 への正規化
+  // 4値すべてが 2.0 以下（かつ少なくとも1つが 0 超）であれば比率表現と判定
+  if (
+    ymin <= 2.0 &&
+    xmin <= 2.0 &&
+    ymax <= 2.0 &&
+    xmax <= 2.0 &&
+    (ymax > 0 || xmax > 0)
+  ) {
+    ymin = ymin * 1000;
+    xmin = xmin * 1000;
+    ymax = ymax * 1000;
+    xmax = xmax * 1000;
+  }
+
+  // 3. 範囲外チェック: わずかなはみ出し（丸め誤差: ±CROP_BOX_TOLERANCE）のみクランプで吸収
+  const minBound = -CROP_BOX_TOLERANCE;
+  const maxBound = 1000 + CROP_BOX_TOLERANCE;
+
+  if (
+    ymin < minBound || ymin > maxBound ||
+    xmin < minBound || xmin > maxBound ||
+    ymax < minBound || ymax > maxBound ||
+    xmax < minBound || xmax > maxBound
+  ) {
+    return {
+      cropBox: null,
+      warning: '切り抜き範囲（cropBox）の座標値が有効範囲（0〜1000）外だったため、写真なしで取り込みます。',
+    };
+  }
+
+  // 4. クランプ (0..1000) と整数化
+  ymin = Math.round(Math.max(0, Math.min(1000, ymin)));
+  xmin = Math.round(Math.max(0, Math.min(1000, xmin)));
+  ymax = Math.round(Math.max(0, Math.min(1000, ymax)));
+  xmax = Math.round(Math.max(0, Math.min(1000, xmax)));
+
+  // 5. 整合性チェック: xmin < xmax かつ ymin < ymax
+  if (xmin >= xmax || ymin >= ymax) {
+    return {
+      cropBox: null,
+      warning: '切り抜き範囲（cropBox）の開始座標と終了座標が逆転していたため、写真なしで取り込みます。',
+    };
+  }
+
+  // 6. 最小サイズチェック（元画像の3%以上: MIN_CROP_DIMENSION）
+  if (xmax - xmin < MIN_CROP_DIMENSION || ymax - ymin < MIN_CROP_DIMENSION) {
+    return {
+      cropBox: null,
+      warning: '切り抜き範囲（cropBox）が極小（3%未満）だったため、写真なしで取り込みます。',
+    };
+  }
+
+  return {
+    cropBox: { ymin, xmin, ymax, xmax },
+  };
+}
+
+/**
  * Markdown コードブロックや前後テキストから JSON 文字列を抽出する
  */
 export function extractJsonFromText(rawText: string): string {
@@ -180,60 +340,47 @@ export function extractJsonFromText(rawText: string): string {
     return codeBlockMatch[1].trim();
   }
 
-  // 先頭の '{' から末尾の '}' までを抽出
+  // 配列 [ ... ] または オブジェクト { ... } の抽出
+  const firstBracket = trimmed.indexOf('[');
   const firstBrace = trimmed.indexOf('{');
-  const lastBrace = trimmed.lastIndexOf('}');
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    return trimmed.slice(firstBrace, lastBrace + 1).trim();
+
+  // 配列が先に出現する場合（または { がない場合）
+  if (firstBracket !== -1 && (firstBrace === -1 || firstBracket < firstBrace)) {
+    const lastBracket = trimmed.lastIndexOf(']');
+    if (lastBracket > firstBracket) {
+      return trimmed.slice(firstBracket, lastBracket + 1).trim();
+    }
+  }
+
+  // オブジェクトが先に出現する場合
+  if (firstBrace !== -1) {
+    const lastBrace = trimmed.lastIndexOf('}');
+    if (lastBrace > firstBrace) {
+      return trimmed.slice(firstBrace, lastBrace + 1).trim();
+    }
   }
 
   return trimmed;
 }
 
 /**
- * Gemini 取り込み JSON を構文解析・2段階検証する純粋関数
- *
- * エラー（弾く）：構文エラー、オブジェクトでない、name 欠落/空、未知の種類、不正な数値型
- * 警告（通す）：未知属性キーの除外、不正 URL の除外、相場目安取得日補完、解説の一部の欠落
+ * 単一の JSON オブジェクトを二段階検証する純粋関数
  */
-export function parseAndValidateGeminiJson(
-  rawInput: unknown,
+export function validateSingleGeminiItem(
+  obj: Record<string, unknown>,
   options: { todayDate?: string } = {}
 ): GeminiValidationResult {
   const today = options.todayDate ?? getTodayDateString();
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  // 1. 文字列の場合は JSON 構文抽出・パース
-  let parsed: unknown = rawInput;
-  if (typeof rawInput === 'string') {
-    const jsonStr = extractJsonFromText(rawInput);
-    try {
-      parsed = JSON.parse(jsonStr);
-    } catch {
-      return {
-        success: false,
-        errors: ['JSONの形式が正しくありません。Geminiの出力が途中で切れていないか確認してください。'],
-      };
-    }
-  }
-
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    return {
-      success: false,
-      errors: ['取り込みデータの形式が不正です（JSONオブジェクトである必要があります）。'],
-    };
-  }
-
-  const obj = parsed as Record<string, unknown>;
-
-  // 2. 必須項目: name (非空文字列)
+  // 1. 必須項目: name (非空文字列)
   if (typeof obj['name'] !== 'string' || obj['name'].trim().length === 0) {
     errors.push('必須項目「名前（銘柄名）」が含まれていないか空欄です。');
   }
   const name = typeof obj['name'] === 'string' ? obj['name'].trim() : '';
 
-  // 3. 必須項目: category (固定10種)
+  // 2. 必須項目: category (固定10種)
   if (!isSakeCategory(obj['category'])) {
     const catStr = String(obj['category'] ?? '');
     errors.push(
@@ -242,7 +389,7 @@ export function parseAndValidateGeminiJson(
   }
   const category = (isSakeCategory(obj['category']) ? obj['category'] : 'その他') as SakeCategory;
 
-  // 4. 数値項目: abv (度数) - 数値型または null のみ受理（暗黙変換・文字列・真偽値は拒否）
+  // 3. 数値項目: abv (度数) - 数値型または null のみ受理（暗黙変換・文字列・真偽値は拒否）
   let abv: number | null = null;
   if (obj['abv'] === undefined || obj['abv'] === null) {
     abv = null;
@@ -252,7 +399,7 @@ export function parseAndValidateGeminiJson(
     errors.push('度数（abv）は 0〜100 の数値または null である必要があります。');
   }
 
-  // 5. 数値項目: volumeMl (容量) - 正の数値型または null のみ受理（暗黙変換・文字列・真偽値は拒否、丸め後が1未満の場合も拒否）
+  // 4. 数値項目: volumeMl (容量) - 正の数値型または null のみ受理（暗黙変換・文字列・真偽値は拒否、丸め後が1未満の場合も拒否）
   let volumeMl: number | null = null;
   if (obj['volumeMl'] === undefined || obj['volumeMl'] === null) {
     volumeMl = null;
@@ -267,7 +414,7 @@ export function parseAndValidateGeminiJson(
     errors.push('容量（volumeMl）は正の数値または null である必要があります。');
   }
 
-  // 6. 相場目安の予備チェック（基本数値型エラーを即座に検出するため）
+  // 5. 相場目安の予備チェック（基本数値型エラーを即座に検出するため）
   let estPrice: number | null = null;
   if (typeof obj['referencePrice'] === 'object' && obj['referencePrice'] !== null && !Array.isArray(obj['referencePrice'])) {
     const r = obj['referencePrice'] as Record<string, unknown>;
@@ -385,6 +532,16 @@ export function parseAndValidateGeminiJson(
     }
   }
 
+  // 10. 切り抜き座標: cropBox
+  let cropBox: NormalizedCropBox | null = null;
+  if ('cropBox' in obj) {
+    const cropResult = validateAndNormalizeCropBox(obj['cropBox']);
+    cropBox = cropResult.cropBox;
+    if (cropResult.warning) {
+      warnings.push(cropResult.warning);
+    }
+  }
+
   return {
     success: true,
     data: {
@@ -396,8 +553,206 @@ export function parseAndValidateGeminiJson(
       description,
       sources,
       referencePrice,
+      cropBox,
     },
     warnings,
+  };
+}
+
+/**
+ * Gemini 単一オブジェクト取り込み JSON を構文解析・2段階検証する純粋関数
+ *
+ * エラー（弾く）：構文エラー、オブジェクトでない、配列である、name 欠落/空、未知の種類、不正な数値型
+ * 警告（通す）：未知属性キーの除外、不正 URL の除外、相場目安取得日補完、解説の一部の欠落、cropBox 不正
+ */
+export function parseAndValidateGeminiJson(
+  rawInput: unknown,
+  options: { todayDate?: string } = {}
+): GeminiValidationResult {
+  let parsed: unknown = rawInput;
+  if (typeof rawInput === 'string') {
+    const jsonStr = extractJsonFromText(rawInput);
+    try {
+      parsed = JSON.parse(jsonStr);
+    } catch {
+      return {
+        success: false,
+        errors: ['JSONの形式が正しくありません。Geminiの出力が途中で切れていないか確認してください。'],
+      };
+    }
+  }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return {
+      success: false,
+      errors: ['取り込みデータの形式が不正です（JSONオブジェクトである必要があります）。'],
+    };
+  }
+
+  return validateSingleGeminiItem(parsed as Record<string, unknown>, options);
+}
+
+/**
+ * Gemini バッチ取り込みの個別要素検証結果型
+ */
+export interface GeminiBatchItemValidationResult {
+  index: number;
+  success: boolean;
+  data?: GeminiImportPayload;
+  errors: string[];
+  warnings: string[];
+}
+
+/**
+ * Gemini バッチ取り込みの全体検証結果型
+ */
+export interface GeminiBatchValidationResult {
+  totalCount: number;
+  validCount: number;
+  items: GeminiBatchItemValidationResult[];
+  globalErrors: string[];
+  globalWarnings: string[];
+}
+
+/**
+ * Gemini 配列取り込み JSON を構文解析・各要素を個別に2段階検証する純粋関数
+ */
+export function parseAndValidateGeminiBatchJson(
+  rawInput: unknown,
+  options: { todayDate?: string } = {}
+): GeminiBatchValidationResult {
+  let parsed: unknown = rawInput;
+  if (typeof rawInput === 'string') {
+    const jsonStr = extractJsonFromText(rawInput);
+    try {
+      parsed = JSON.parse(jsonStr);
+    } catch {
+      return {
+        totalCount: 0,
+        validCount: 0,
+        items: [],
+        globalErrors: ['JSONの形式が正しくありません。Geminiの出力が途中で切れていないか確認してください。'],
+        globalWarnings: [],
+      };
+    }
+  }
+
+  if (!Array.isArray(parsed)) {
+    return {
+      totalCount: 0,
+      validCount: 0,
+      items: [],
+      globalErrors: ['取り込みデータの形式が不正です（JSON配列である必要があります）。'],
+      globalWarnings: [],
+    };
+  }
+
+  if (parsed.length === 0) {
+    return {
+      totalCount: 0,
+      validCount: 0,
+      items: [],
+      globalErrors: ['取り込みデータが空の配列です。'],
+      globalWarnings: [],
+    };
+  }
+
+  if (parsed.length > MAX_GEMINI_BATCH_SIZE) {
+    return {
+      totalCount: parsed.length,
+      validCount: 0,
+      items: [],
+      globalErrors: [
+        `一度に取り込めるのは最大${MAX_GEMINI_BATCH_SIZE}本までです（検出件数: ${parsed.length}本）。${MAX_GEMINI_BATCH_SIZE}本以内に分割して取り込んでください。`,
+      ],
+      globalWarnings: [],
+    };
+  }
+
+  const items: GeminiBatchItemValidationResult[] = [];
+  let validCount = 0;
+
+  for (let i = 0; i < parsed.length; i++) {
+    const element = parsed[i];
+    if (typeof element !== 'object' || element === null || Array.isArray(element)) {
+      items.push({
+        index: i,
+        success: false,
+        errors: [`${i + 1}本目: JSONオブジェクト形式ではありません。`],
+        warnings: [],
+      });
+      continue;
+    }
+
+    const itemResult = validateSingleGeminiItem(element as Record<string, unknown>, options);
+    if (itemResult.success) {
+      validCount++;
+      items.push({
+        index: i,
+        success: true,
+        data: itemResult.data,
+        errors: [],
+        warnings: itemResult.warnings,
+      });
+    } else {
+      items.push({
+        index: i,
+        success: false,
+        errors: itemResult.errors.map((err) => `${i + 1}本目: ${err}`),
+        warnings: [],
+      });
+    }
+  }
+
+  return {
+    totalCount: parsed.length,
+    validCount,
+    items,
+    globalErrors: [],
+    globalWarnings: [],
+  };
+}
+
+/**
+ * Gemini 取り込みの判別共用体型
+ */
+export type GeminiImportResult =
+  | { kind: 'single'; result: GeminiValidationResult }
+  | { kind: 'batch'; result: GeminiBatchValidationResult };
+
+/**
+ * Gemini 入力が単一オブジェクトか配列かを自動判別して検証する純粋関数
+ */
+export function parseAndValidateGeminiInput(
+  rawInput: unknown,
+  options: { todayDate?: string } = {}
+): GeminiImportResult {
+  let parsed: unknown = rawInput;
+  if (typeof rawInput === 'string') {
+    const jsonStr = extractJsonFromText(rawInput);
+    try {
+      parsed = JSON.parse(jsonStr);
+    } catch {
+      return {
+        kind: 'single',
+        result: {
+          success: false,
+          errors: ['JSONの形式が正しくありません。Geminiの出力が途中で切れていないか確認してください。'],
+        },
+      };
+    }
+  }
+
+  if (Array.isArray(parsed)) {
+    return {
+      kind: 'batch',
+      result: parseAndValidateGeminiBatchJson(parsed, options),
+    };
+  }
+
+  return {
+    kind: 'single',
+    result: parseAndValidateGeminiJson(parsed, options),
   };
 }
 

@@ -7,6 +7,56 @@ export const MAX_IMAGE_DIMENSION = 1600;
 export const JPEG_QUALITY = 0.82;
 
 /**
+ * 0〜1000 の正規化座標系による切り抜き範囲 (左上原点: (0, 0), 右下: (1000, 1000))
+ */
+export interface NormalizedCropBox {
+  ymin: number;
+  xmin: number;
+  ymax: number;
+  xmax: number;
+}
+
+/**
+ * 元画像上の実ピクセル切り抜き矩形
+ */
+export interface CropPixelRect {
+  sx: number;
+  sy: number;
+  sw: number;
+  sh: number;
+}
+
+/**
+ * 元画像の寸法と 0..1000 の正規化 cropBox から実ピクセルの切り抜き矩形を計算する純粋関数
+ */
+export function calculateCropPixelRect(
+  origW: number,
+  origH: number,
+  cropBox: NormalizedCropBox
+): CropPixelRect {
+  const safeW = Math.max(1, Math.round(origW));
+  const safeH = Math.max(1, Math.round(origH));
+
+  // 0..1000 の範囲に収める
+  const clampedXmin = Math.max(0, Math.min(1000, cropBox.xmin));
+  const clampedYmin = Math.max(0, Math.min(1000, cropBox.ymin));
+  const clampedXmax = Math.max(clampedXmin, Math.min(1000, cropBox.xmax));
+  const clampedYmax = Math.max(clampedYmin, Math.min(1000, cropBox.ymax));
+
+  const sx = Math.max(0, Math.min(safeW - 1, Math.round((clampedXmin / 1000) * safeW)));
+  const sy = Math.max(0, Math.min(safeH - 1, Math.round((clampedYmin / 1000) * safeH)));
+
+  const rawSw = Math.round(((clampedXmax - clampedXmin) / 1000) * safeW);
+  const rawSh = Math.round(((clampedYmax - clampedYmin) / 1000) * safeH);
+
+  // 少なくとも1ピクセル以上、かつ画像幅・高さを超えない
+  const sw = Math.max(1, Math.min(safeW - sx, rawSw));
+  const sh = Math.max(1, Math.min(safeH - sy, rawSh));
+
+  return { sx, sy, sw, sh };
+}
+
+/**
  * 画像のリサイズ寸法を計算する純粋関数
  *
  * 要件:
@@ -228,6 +278,90 @@ export async function processImageFileToPhotoRecord(
   const record: PhotoRecord = {
     id: photoId,
     bottleId,
+    mimeType: 'image/jpeg',
+    dataUrl,
+    width,
+    height,
+    byteSize,
+    contentHash,
+    driveFileId: null,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    deleted: false,
+  };
+
+  return record;
+}
+
+/**
+ * 元写真の Data URL から指定矩形（cropBox）を切り抜き、
+ * リサイズ・JPEG 0.82 再エンコード・SHA-256 算出を行って新しい PhotoRecord を生成する
+ */
+export async function cropPhotoRecordToNewPhotoRecord(
+  sourcePhoto: PhotoRecord,
+  cropBox: NormalizedCropBox,
+  targetBottleId: string,
+  options: { nowIso?: string; photoId?: string } = {}
+): Promise<PhotoRecord> {
+  const photoId = options.photoId ?? generateUuid();
+  const nowIso = options.nowIso ?? new Date().toISOString();
+
+  let sourceImage: ImageBitmap | HTMLImageElement;
+  let sourceW = 0;
+  let sourceH = 0;
+
+  // 1. 画像デコード (Data URL から)
+  if (typeof document !== 'undefined') {
+    const img = document.createElement('img');
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error('切り抜き元画像の読み込みに失敗しました'));
+      img.src = sourcePhoto.dataUrl;
+    });
+    sourceW = img.naturalWidth || sourcePhoto.width;
+    sourceH = img.naturalHeight || sourcePhoto.height;
+    sourceImage = img;
+  } else if (typeof createImageBitmap === 'function' && typeof fetch === 'function') {
+    const res = await fetch(sourcePhoto.dataUrl);
+    const blob = await res.blob();
+    const bitmap = await createImageBitmap(blob);
+    sourceW = bitmap.width;
+    sourceH = bitmap.height;
+    sourceImage = bitmap;
+  } else {
+    throw new Error('Canvas / DOM 環境が利用できないため、画像切り抜き処理を実行できません。');
+  }
+
+  // 2. 実ピクセルの切り抜き矩形を算出
+  const { sx, sy, sw, sh } = calculateCropPixelRect(sourceW, sourceH, cropBox);
+
+  // 3. リサイズ寸法の計算（長辺最大 1600px、拡大なし）
+  const { width, height } = calculateResizedDimensions(sw, sh, MAX_IMAGE_DIMENSION);
+
+  // 4. Canvas 切り抜き描画と JPEG 0.82 への再エンコード
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('Canvas 2D コンテキストの取得に失敗しました');
+  }
+
+  ctx.drawImage(sourceImage, sx, sy, sw, sh, 0, 0, width, height);
+
+  if ('close' in sourceImage && typeof sourceImage.close === 'function') {
+    sourceImage.close();
+  }
+
+  const dataUrl = canvas.toDataURL('image/jpeg', JPEG_QUALITY);
+
+  // 5. SHA-256 ハッシュとバイトサイズの算出
+  const { contentHash, byteSize } = await computeDataUrlHashAndSize(dataUrl);
+
+  const record: PhotoRecord = {
+    id: photoId,
+    bottleId: targetBottleId,
     mimeType: 'image/jpeg',
     dataUrl,
     width,

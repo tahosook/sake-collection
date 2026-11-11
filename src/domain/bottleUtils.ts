@@ -8,10 +8,12 @@ import {
   SakeDescription,
   DescriptionSource,
   ReferencePriceInfo,
+  PhotoRecord,
 } from '../types/sake';
 import { isValidCalendarDate } from './validation';
 import { generateGroupKey, normalizeSakeName } from './sortAndGroup';
 import { generateUuid } from './uuid';
+import type { GeminiImportPayload } from './geminiPrompt';
 
 /**
  * 現在の日付文字列を YYYY-MM-DD 形式で取得する (ローカル暦日基準)
@@ -471,4 +473,109 @@ export function createBottlesBatch<C extends SakeCategory>(
     bottles,
     photosToClone,
   };
+}
+
+/**
+ * Gemini バッチ取り込みの選択済みアイテムから BottleRecord 群と保存用 PhotoRecord 群を生成する純粋関数
+ */
+export function createBottlesFromGeminiBatch(
+  items: GeminiImportPayload[],
+  croppedPhotos: Array<PhotoRecord | null | undefined> = [],
+  options: { nowIso?: string } = {}
+): {
+  bottles: BottleRecord[];
+  photosToSave: PhotoRecord[];
+} {
+  const nowIso = options.nowIso ?? new Date().toISOString();
+  const bottles: BottleRecord[] = [];
+  const photosToSave: PhotoRecord[] = [];
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]!;
+    const bottleId = generateUuid();
+    const croppedPhoto = croppedPhotos[i];
+
+    const photoIds: string[] = [];
+    let primaryPhotoId: string | null = null;
+
+    if (croppedPhoto) {
+      // 切り抜き写真の bottleId を生成したボトルの ID に設定
+      const finalPhoto: PhotoRecord = {
+        ...croppedPhoto,
+        bottleId,
+        createdAt: croppedPhoto.createdAt || nowIso,
+        updatedAt: croppedPhoto.updatedAt || nowIso,
+      };
+      photoIds.push(finalPhoto.id);
+      primaryPhotoId = finalPhoto.id;
+      photosToSave.push(finalPhoto);
+    }
+
+    const bottle = createNewBottle(
+      {
+        name: item.name,
+        category: item.category,
+        abv: item.abv,
+        volumeMl: item.volumeMl,
+        categoryAttributes: item.categoryAttributes,
+        status: 'unopened',
+        description: item.description,
+        sources: item.sources,
+        referencePrice: item.referencePrice,
+        photoIds,
+        primaryPhotoId,
+      },
+      { id: bottleId, nowIso }
+    );
+
+    bottles.push(bottle);
+  }
+
+  return {
+    bottles,
+    photosToSave,
+  };
+}
+
+/**
+ * バッチ内の重複銘柄情報
+ */
+export interface IntraBatchDuplicateInfo {
+  hasDuplicate: boolean;
+  duplicateCount: number;
+  matchingIndices: number[];
+}
+
+/**
+ * 取り込み配列内部での同名銘柄（同一種類かつ正規化銘柄名が一致）の重複を検出する純粋関数
+ */
+export function detectIntraBatchDuplicates(
+  items: Array<{ name: string; category: SakeCategory }>
+): IntraBatchDuplicateInfo[] {
+  const normNames = items.map((item) => ({
+    normName: normalizeSakeName(item.name),
+    category: item.category,
+  }));
+
+  return items.map((_item, idx) => {
+    const current = normNames[idx]!;
+    if (!current.normName) {
+      return { hasDuplicate: false, duplicateCount: 1, matchingIndices: [idx] };
+    }
+
+    const matchingIndices: number[] = [];
+    for (let j = 0; j < normNames.length; j++) {
+      const other = normNames[j]!;
+      if (other.category === current.category && other.normName === current.normName) {
+        matchingIndices.push(j);
+      }
+    }
+
+    const hasDuplicate = matchingIndices.length > 1;
+    return {
+      hasDuplicate,
+      duplicateCount: matchingIndices.length,
+      matchingIndices,
+    };
+  });
 }
