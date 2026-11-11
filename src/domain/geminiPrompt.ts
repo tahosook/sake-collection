@@ -183,17 +183,37 @@ export type GeminiValidationResult =
     };
 
 /**
+ * 切り抜き範囲（cropBox）の座標許容誤差（0..1000 スケール基準で ±10 = 1%）
+ */
+export const CROP_BOX_TOLERANCE = 10;
+
+/**
+ * 切り抜き範囲（cropBox）の最小寸法（元画像の3%以上: 30）
+ */
+export const MIN_CROP_DIMENSION = 30;
+
+/**
+ * 値が有限な数値であるかを判定するガード関数
+ */
+function isFiniteNumber(val: unknown): val is number {
+  return typeof val === 'number' && Number.isFinite(val);
+}
+
+/**
  * Gemini が出力した切り抜き座標（cropBox）を検証・正規化する純粋関数
  *
  * 入力形式:
  * - オブジェクト: { ymin, xmin, ymax, xmax }
- * - 配列: [ymin, xmin, ymax, xmax]
+ * - 配列: [ymin, xmin, ymax, xmax]（要素数ちょうど4）
  * - 0..1 の小数表現または 0..1000 の整数表現
  *
  * 有効条件:
- * - 4値が有限の数値
+ * - 各座標が変換前に typeof 'number' かつ Number.isFinite（文字列・真偽値・null・欠落キーは不可）
+ * - 配列形式は要素数がちょうど4
+ * - わずかな丸め誤差（±CROP_BOX_TOLERANCE = ±10）以内の範囲（-10 <= coord <= 1010）に収まっていること（許容内は 0..1000 へクランプ）
+ * - 許容範囲を超える値は不正座標として警告付きで cropBox: null（写真なし）へフォールバック
  * - 0 <= ymin < ymax <= 1000 かつ 0 <= xmin < xmax <= 1000
- * - 幅・高さともに 30 (3%) 以上
+ * - 幅・高さともに MIN_CROP_DIMENSION (30, 元画像の3%) 以上
  *
  * 未指定・null は写真なし（cropBox: null, 警告なし）
  * 不正座標は警告付きで写真なし（cropBox: null）にフォールバック
@@ -206,22 +226,25 @@ export function validateAndNormalizeCropBox(rawCropBox: unknown): {
     return { cropBox: null };
   }
 
-  let ymin: number | undefined;
-  let xmin: number | undefined;
-  let ymax: number | undefined;
-  let xmax: number | undefined;
+  let rawYmin: unknown;
+  let rawXmin: unknown;
+  let rawYmax: unknown;
+  let rawXmax: unknown;
 
-  if (Array.isArray(rawCropBox) && rawCropBox.length >= 4) {
-    ymin = Number(rawCropBox[0]);
-    xmin = Number(rawCropBox[1]);
-    ymax = Number(rawCropBox[2]);
-    xmax = Number(rawCropBox[3]);
+  if (Array.isArray(rawCropBox)) {
+    if (rawCropBox.length !== 4) {
+      return {
+        cropBox: null,
+        warning: '切り抜き範囲（cropBox）の配列形式は要素数が4である必要があります。写真なしで取り込みます。',
+      };
+    }
+    [rawYmin, rawXmin, rawYmax, rawXmax] = rawCropBox;
   } else if (typeof rawCropBox === 'object' && rawCropBox !== null) {
     const o = rawCropBox as Record<string, unknown>;
-    ymin = Number(o['ymin']);
-    xmin = Number(o['xmin']);
-    ymax = Number(o['ymax']);
-    xmax = Number(o['xmax']);
+    rawYmin = o['ymin'];
+    rawXmin = o['xmin'];
+    rawYmax = o['ymax'];
+    rawXmax = o['xmax'];
   } else {
     return {
       cropBox: null,
@@ -229,38 +252,62 @@ export function validateAndNormalizeCropBox(rawCropBox: unknown): {
     };
   }
 
+  // 1. 各座標の型と有限性チェック (typeof === 'number' && Number.isFinite)
   if (
-    ymin === undefined || isNaN(ymin) ||
-    xmin === undefined || isNaN(xmin) ||
-    ymax === undefined || isNaN(ymax) ||
-    xmax === undefined || isNaN(xmax)
+    !isFiniteNumber(rawYmin) ||
+    !isFiniteNumber(rawXmin) ||
+    !isFiniteNumber(rawYmax) ||
+    !isFiniteNumber(rawXmax)
   ) {
     return {
       cropBox: null,
-      warning: '切り抜き範囲（cropBox）の座標値が数値でなかったため、写真なしで取り込みます。',
+      warning: '切り抜き範囲（cropBox）の座標値が有限な数値でなかったため、写真なしで取り込みます。',
     };
   }
 
-  // 0.0〜1.0 の小数形式判定（全要素が 0 以上かつ <= 1.0 の場合）
-  if (ymin <= 1.0 && xmin <= 1.0 && ymax <= 1.0 && xmax <= 1.0 && (ymax > 0 || xmax > 0)) {
-    ymin = Math.round(ymin * 1000);
-    xmin = Math.round(xmin * 1000);
-    ymax = Math.round(ymax * 1000);
-    xmax = Math.round(xmax * 1000);
-  } else {
-    ymin = Math.round(ymin);
-    xmin = Math.round(xmin);
-    ymax = Math.round(ymax);
-    xmax = Math.round(xmax);
+  let ymin = rawYmin;
+  let xmin = rawXmin;
+  let ymax = rawYmax;
+  let xmax = rawXmax;
+
+  // 2. 0.0〜1.0 の比率表現の検出と 0..1000 への正規化
+  // 4値すべてが 2.0 以下（かつ少なくとも1つが 0 超）であれば比率表現と判定
+  if (
+    ymin <= 2.0 &&
+    xmin <= 2.0 &&
+    ymax <= 2.0 &&
+    xmax <= 2.0 &&
+    (ymax > 0 || xmax > 0)
+  ) {
+    ymin = ymin * 1000;
+    xmin = xmin * 1000;
+    ymax = ymax * 1000;
+    xmax = xmax * 1000;
   }
 
-  // クランプ (0..1000)
-  ymin = Math.max(0, Math.min(1000, ymin));
-  xmin = Math.max(0, Math.min(1000, xmin));
-  ymax = Math.max(0, Math.min(1000, ymax));
-  xmax = Math.max(0, Math.min(1000, xmax));
+  // 3. 範囲外チェック: わずかなはみ出し（丸め誤差: ±CROP_BOX_TOLERANCE）のみクランプで吸収
+  const minBound = -CROP_BOX_TOLERANCE;
+  const maxBound = 1000 + CROP_BOX_TOLERANCE;
 
-  // 整合性チェック: xmin < xmax かつ ymin < ymax
+  if (
+    ymin < minBound || ymin > maxBound ||
+    xmin < minBound || xmin > maxBound ||
+    ymax < minBound || ymax > maxBound ||
+    xmax < minBound || xmax > maxBound
+  ) {
+    return {
+      cropBox: null,
+      warning: '切り抜き範囲（cropBox）の座標値が有効範囲（0〜1000）外だったため、写真なしで取り込みます。',
+    };
+  }
+
+  // 4. クランプ (0..1000) と整数化
+  ymin = Math.round(Math.max(0, Math.min(1000, ymin)));
+  xmin = Math.round(Math.max(0, Math.min(1000, xmin)));
+  ymax = Math.round(Math.max(0, Math.min(1000, ymax)));
+  xmax = Math.round(Math.max(0, Math.min(1000, xmax)));
+
+  // 5. 整合性チェック: xmin < xmax かつ ymin < ymax
   if (xmin >= xmax || ymin >= ymax) {
     return {
       cropBox: null,
@@ -268,8 +315,7 @@ export function validateAndNormalizeCropBox(rawCropBox: unknown): {
     };
   }
 
-  // 最小サイズチェック（元画像の3%以上: 30）
-  const MIN_CROP_DIMENSION = 30;
+  // 6. 最小サイズチェック（元画像の3%以上: MIN_CROP_DIMENSION）
   if (xmax - xmin < MIN_CROP_DIMENSION || ymax - ymin < MIN_CROP_DIMENSION) {
     return {
       cropBox: null,

@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   MAX_GEMINI_BATCH_SIZE,
+  CROP_BOX_TOLERANCE,
+  MIN_CROP_DIMENSION,
   extractJsonFromText,
   validateAndNormalizeCropBox,
   parseAndValidateGeminiJson,
@@ -109,11 +111,177 @@ describe('Gemini 相談結果の配列一括取り込み (PR 1: ドメインロ�
       const result = validateAndNormalizeCropBox({
         ymin: 100,
         xmin: 100,
-        ymax: 120, // 高さ 20 (< 30)
+        ymax: 100 + MIN_CROP_DIMENSION - 10, // 高さ 20 (< 30)
         xmax: 500,
       });
       expect(result.cropBox).toBeNull();
       expect(result.warning).toContain('極小（3%未満）');
+    });
+
+    it('座標が number かつ有限数でない場合（null・文字列・真偽値・欠落・NaN・Infinity）は警告付きで cropBox: null となること', () => {
+      // null を含むオブジェクト
+      const resNull = validateAndNormalizeCropBox({
+        ymin: null,
+        xmin: 100,
+        ymax: 900,
+        xmax: 500,
+      });
+      expect(resNull.cropBox).toBeNull();
+      expect(resNull.warning).toContain('有限な数値でなかった');
+
+      // 文字列を含むオブジェクト
+      const resStr = validateAndNormalizeCropBox({
+        ymin: '100',
+        xmin: 100,
+        ymax: 900,
+        xmax: 500,
+      });
+      expect(resStr.cropBox).toBeNull();
+      expect(resStr.warning).toContain('有限な数値でなかった');
+
+      // 真偽値を含むオブジェクト
+      const resBool = validateAndNormalizeCropBox({
+        ymin: true,
+        xmin: 100,
+        ymax: 900,
+        xmax: 500,
+      });
+      expect(resBool.cropBox).toBeNull();
+      expect(resBool.warning).toContain('有限な数値でなかった');
+
+      // キー欠落オブジェクト
+      const resMissing = validateAndNormalizeCropBox({
+        ymin: 100,
+        xmax: 500,
+      });
+      expect(resMissing.cropBox).toBeNull();
+      expect(resMissing.warning).toContain('有限な数値でなかった');
+
+      // NaN を含むオブジェクト
+      const resNan = validateAndNormalizeCropBox({
+        ymin: NaN,
+        xmin: 100,
+        ymax: 900,
+        xmax: 500,
+      });
+      expect(resNan.cropBox).toBeNull();
+      expect(resNan.warning).toContain('有限な数値でなかった');
+
+      // Infinity を含むオブジェクト
+      const resInf = validateAndNormalizeCropBox({
+        ymin: 100,
+        xmin: 100,
+        ymax: Infinity,
+        xmax: 500,
+      });
+      expect(resInf.cropBox).toBeNull();
+      expect(resInf.warning).toContain('有限な数値でなかった');
+
+      // 配列形式に非有限数が含まれる場合
+      const resArrNull = validateAndNormalizeCropBox([null, 100, 900, 500]);
+      expect(resArrNull.cropBox).toBeNull();
+      expect(resArrNull.warning).toContain('有限な数値でなかった');
+
+      const resArrStr = validateAndNormalizeCropBox([100, '200', 900, 500]);
+      expect(resArrStr.cropBox).toBeNull();
+      expect(resArrStr.warning).toContain('有限な数値でなかった');
+
+      const resArrBool = validateAndNormalizeCropBox([100, 200, false, 500]);
+      expect(resArrBool.cropBox).toBeNull();
+      expect(resArrBool.warning).toContain('有限な数値でなかった');
+
+      // オブジェクト・配列以外の不正な形式
+      const resPrimitive = validateAndNormalizeCropBox(12345);
+      expect(resPrimitive.cropBox).toBeNull();
+      expect(resPrimitive.warning).toContain('形式が不正なため');
+    });
+
+    it('配列形式の要素数が4でない場合（3要素、5要素、空配列）は警告付きで cropBox: null となること', () => {
+      const res3 = validateAndNormalizeCropBox([100, 200, 900]);
+      expect(res3.cropBox).toBeNull();
+      expect(res3.warning).toContain('配列形式は要素数が4である必要があります');
+
+      const res5 = validateAndNormalizeCropBox([100, 200, 900, 500, 600]);
+      expect(res5.cropBox).toBeNull();
+      expect(res5.warning).toContain('配列形式は要素数が4である必要があります');
+
+      const res0 = validateAndNormalizeCropBox([]);
+      expect(res0.cropBox).toBeNull();
+      expect(res0.warning).toContain('配列形式は要素数が4である必要があります');
+    });
+
+    it('わずかなはみ出し（許容誤差 CROP_BOX_TOLERANCE 以内）は 0..1000 にクランプされて受理されること', () => {
+      // 0..1000 スケール: 下限境界 (-CROP_BOX_TOLERANCE = -10) と上限境界 (1000 + CROP_BOX_TOLERANCE = 1010)
+      const resClamped = validateAndNormalizeCropBox({
+        ymin: -CROP_BOX_TOLERANCE,
+        xmin: 100,
+        ymax: 1000 + CROP_BOX_TOLERANCE,
+        xmax: 500,
+      });
+      expect(resClamped.warning).toBeUndefined();
+      expect(resClamped.cropBox).toEqual({
+        ymin: 0,
+        xmin: 100,
+        ymax: 1000,
+        xmax: 500,
+      });
+
+      // 0.0〜1.0 比率スケール: 丸め誤差境界
+      const resRatioClamped = validateAndNormalizeCropBox({
+        ymin: -(CROP_BOX_TOLERANCE / 1000), // -0.01
+        xmin: 0.1,
+        ymax: 1.0 + (CROP_BOX_TOLERANCE / 1000), // 1.01
+        xmax: 0.5,
+      });
+      expect(resRatioClamped.warning).toBeUndefined();
+      expect(resRatioClamped.cropBox).toEqual({
+        ymin: 0,
+        xmin: 100,
+        ymax: 1000,
+        xmax: 500,
+      });
+    });
+
+    it('許容誤差を超える範囲外の値は警告付きで cropBox: null にフォールバックすること', () => {
+      // 0..1000 スケール: 下限境界の外側 (-11)
+      const resLowerOut = validateAndNormalizeCropBox({
+        ymin: -(CROP_BOX_TOLERANCE + 1),
+        xmin: 100,
+        ymax: 900,
+        xmax: 500,
+      });
+      expect(resLowerOut.cropBox).toBeNull();
+      expect(resLowerOut.warning).toContain('有効範囲（0〜1000）外');
+
+      // 0..1000 スケール: 上限境界の外側 (1011)
+      const resUpperOut = validateAndNormalizeCropBox({
+        ymin: 100,
+        xmin: 100,
+        ymax: 1000 + CROP_BOX_TOLERANCE + 1,
+        xmax: 500,
+      });
+      expect(resUpperOut.cropBox).toBeNull();
+      expect(resUpperOut.warning).toContain('有効範囲（0〜1000）外');
+
+      // 0..1000 スケール: 大きく範囲外 (-500, 1500)
+      const resLargeOut = validateAndNormalizeCropBox({
+        ymin: -500,
+        xmin: 100,
+        ymax: 1500,
+        xmax: 500,
+      });
+      expect(resLargeOut.cropBox).toBeNull();
+      expect(resLargeOut.warning).toContain('有効範囲（0〜1000）外');
+
+      // 0.0〜1.0 比率スケール: 許容誤差外の範囲外 (-0.05, 1.05)
+      const resRatioOut = validateAndNormalizeCropBox({
+        ymin: -0.05,
+        xmin: 0.1,
+        ymax: 1.05,
+        xmax: 0.5,
+      });
+      expect(resRatioOut.cropBox).toBeNull();
+      expect(resRatioOut.warning).toContain('有効範囲（0〜1000）外');
     });
   });
 
