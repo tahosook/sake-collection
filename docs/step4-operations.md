@@ -52,7 +52,7 @@ flowchart TD
 
     subgraph CF["Cloudflare (本人限定公開境界)"]
         Pages["Cloudflare Pages\n(静的ホスティング: HTML/JS/CSS)"]
-        Access["Cloudflare Access\n(Google ログイン認証・本人のみ許可)"]
+        Access["Cloudflare Access\n(メールログインコード認証・本人のみ許可)"]
         Func["Pages Functions\nGET /api/sync-config"]
         Access --> Pages
         Access --> Func
@@ -66,7 +66,7 @@ flowchart TD
         GAS <--> Drive
     end
 
-    Client -- "① アクセス (Google ログイン)" --> Access
+    Client -- "① アクセス (メールログインコード認証)" --> Access
     SyncClient -- "② 接続設定自動取得\n(JWT 検証済 fail-closed)" --> Func
     SyncClient -- "③ 同期・画像送受信\n(合言葉 fail-closed POST)" --> GAS
 ```
@@ -75,7 +75,7 @@ flowchart TD
 1. **GitHub 公開リポジトリへの平文非保持**:
    - GAS URL や合言葉などの秘密情報は、ソースコード・ビルド成果物（`dist/`）に一切含めません（`VITE_*` 環境変数の使用禁止）。
 2. **多層防御（2つの独立した境界）**:
-   - **画面側境界（Cloudflare Access）**: ユーザー本人の Google アカウントのみがアクセス可能。未認証アクセスは Pages Functions も含めて `403 Forbidden` / ログインリダイレクト。
+   - **画面側境界（Cloudflare Access）**: ユーザー本人のメールアドレス宛に送信されるワンタイムログインコード（PIN）による認証。未認証アクセスは Pages Functions も含めて `403 Forbidden` / ログインリダイレクト。
    - **データ側境界（GAS Web アプリ）**: Access を万一バイパスされた場合でも、共有シークレット（`SYNC_PASSPHRASE`）による定数時間比較の fail-closed 認証で保護。
 3. **写真の完全非公開保護**:
    - 写真が保存される Google Drive フォルダは「リンクを知っている全員」を禁止（制限付き）とし、GAS 経由でのみ中継・取得されます。
@@ -160,44 +160,46 @@ Cloudflare ダッシュボードにログインし、本番およびプレビュ
    - **Build command**: `npm run build`
    - **Build output directory**: `dist`
 4. ※環境変数（Secrets）はこの段階では登録せず、まずは「Save and Deploy」をクリックして初回のビルド・デプロイを走らせます。
-5. デプロイ完了後、割り当てられたドメイン（`https://sake-collection.pages.dev`）を確認します。
+5. デプロイ完了後、割り当てられたドメイン（`https://sake-collection-cs2.pages.dev`）を確認します。
 
 ### 3.2 Cloudflare Access（Zero Trust）の設定
-Cloudflare Pages のアクセス制御機能（Access policy）を活用し、本番環境（`sake-collection.pages.dev`）およびすべてのプレビュー環境（`*.sake-collection.pages.dev`）を、Google ログインによる本人限定アクセスで保護します。手動での個別アプリケーション作成は行わず、Pages が生成する2つの Access Application を設定・管理する形に一本化します。
+本番環境（`sake-collection-cs2.pages.dev`）およびすべてのプレビュー環境（`*.sake-collection-cs2.pages.dev`）を、Cloudflare Access による本人限定アクセスで保護します。実際の構成として、**本番用（手動作成）とプレビュー用（Pages 自動生成）の2件の Access Application** を設定・運用します。
 
-1. **Pages プロジェクト側での Access policy の初期有効化**:
-   - Cloudflare ダッシュボード > **Workers & Pages** > **`sake-collection`** を開きます。
-   - **Settings** > **General** を開き、画面下部の **Access policy** セクションまでスクロールします。
-   - **「Enable access policy」**（プレビューデプロイへのアクセス制御）をクリックして有効化します。
-   - ※これにより、Zero Trust 側に Pages 用の Access Application が自動作成されます。
-2. **自動生成された Preview ポリシーの調整（Known issues 対応）**:
-   - Cloudflare の現行仕様では、自動生成時に `*` サブドメインが含まれて本番側設定と干渉する既知の挙動（Known issues）があります。以下の手順で調整します：
-     1. 左メニュー **Zero Trust** > **Access** > **Applications** を開きます。
-     2. 自動生成された Pages プレビュー用アプリケーションの設定を開き、Application domain に含まれているワイルドカード **`*` サブドメイン** を削除して保存します。
-     3. 再度 Workers & Pages > **`sake-collection`** > **Settings** > **General** > **Access policy** に戻り、**「Enable access policy」** を選択し直します（または再適用します）。
-3. **2つの Access Application への本人限定ポリシーの設定**:
-   - Zero Trust > **Access** > **Applications** にて、Pages によって以下の **2つのアプリケーション** が生成されていることを確認します：
-     - **本番用アプリケーション（`*.pages.dev` 用）**: 本番ドメイン（`sake-collection.pages.dev`）用
-     - **プレビュー用アプリケーション（`*.sake-collection.pages.dev` 用）**: 個別コミットや PR のプレビュー URL 用
-   - それぞれのアプリケーションを開き、**Policies** タブで本人限定の Allow ポリシーを設定（または確認）します：
+1. **本番用 Access Application の手動作成（apex ドメイン用）**:
+   - Zero Trust ダッシュボード > **Access** > **Applications** を開きます。
+   - **「Add an application」** > **「Self-hosted」** を選択します。
+   - **Application configuration**:
+     - **Application name**: `sake-collection-production`（任意の識別名）
+     - **Application domain**: `sake-collection-cs2.pages.dev`
+   - **Policies**:
      - **Policy name**: `Allow Owner Only`
      - **Action**: `Allow`
      - **Configure rules**:
        - **Selector**: `Emails`
-       - **Value**: `<あなたのGoogleアカウントのメールアドレス>`（リポジトリには記載しない）
-     - ※Identity Providers に `Google` が有効化されていることを確認します（未設定の場合は Zero Trust > Settings > Authentication で Google IdP を追加）。
-   - ※この手順により、本番 URL だけでなく、個別コミットや PR ごとに生成されるハッシュ付き Preview Deployment URL（例: `<deployment-hash>.sake-collection.pages.dev`）へのダイレクトアクセスも漏れなく Cloudflare Access で確実に保護されます。
-4. **環境別の Audience Tag (AUD) の取得**:
-   - 本番用とプレビュー用の **両方のアプリケーションから、それぞれの Audience Tag (AUD) を控えます**（次項の環境変数登録で Production と Preview に分けて個別に登録します）：
-     - **本番用 AUD**: 本番用アプリケーション（`*.pages.dev` 用）の **Overview** 画面に表示されている AUD 文字列をコピーして控えます。
-     - **プレビュー用 AUD**: プレビュー用アプリケーション（`*.sake-collection.pages.dev` 用）の **Overview** 画面に表示されている AUD 文字列をコピーして控えます。
+       - **Value**: `<本人のメールアドレス>`（リポジトリには実アドレスを記載せず Cloudflare 側で設定）
+   - 保存してアプリケーションを作成します。
+
+2. **プレビュー用 Access Application の生成（Pages 設定）**:
+   - Cloudflare ダッシュボード > **Workers & Pages** > **`sake-collection`** を開きます。
+   - **Settings** > **General** を開き、画面下部の **Access policy** セクションまでスクロールします。
+   - **「Enable access policy」**（プレビューデプロイへのアクセス制御）をクリックして有効化します。
+   - ※これにより、Zero Trust 側にプレビュー用の Access Application（Application domain: `*.sake-collection-cs2.pages.dev`）が自動生成されます。
+   - Zero Trust > **Access** > **Applications** を開き、自動生成されたプレビュー用 Application の Policies にて、本番用と同様に本人メールアドレス限定の Allow ポリシー（Selector: `Emails`、Value: `<本人のメールアドレス>`）が適用されていることを確認します。
+
+3. **認証（ログイン）方式の実態（メール宛ログインコード送信方式）**:
+   - Cloudflare Access の認証画面は、メールアドレスを入力するとワンタイムログインコード（PIN）がメール送信され、そのコードを入力して認証する方式（One-time PIN）となります（Google ログインボタンは表示されません）。
+
+4. **共通の Audience Tag (AUD) の取得**:
+   - AUD は本番用・プレビュー用の両環境で **共通の1つの値** を使用します。
+   - Application の **Overview** 画面に表示されている Audience Tag（AUD）文字列をコピーして安全に控えます。
+
 5. **チームドメイン（Team Domain）の確認**:
    - Zero Trust > Settings > Custom Pages または Overview から、自組織のチームドメインを確認して控えます。
    - 例: `<your-team-name>.cloudflareaccess.com`
 
 ### 3.3 Pages Secret 環境変数の登録
 Pages Functions（`/api/sync-config`）が Access JWT の完全検証を行い、GAS URL と合言葉を安全にクライアントへ返すための環境変数を設定します。
-実装（`functions/api/sync-config.ts`）は環境ごとに単一の AUD を検証する仕様となっているため、`SAKE_ACCESS_AUD` は環境ごとにその環境に対応する Application の AUD を登録します（Production 環境には本番用 Application の AUD、Preview 環境にはプレビュー用 Application の AUD）。
+本番 Application とプレビュー Application で AUD は共通の1つの値となっているため、`SAKE_ACCESS_AUD` には Production・Preview の両環境に同一の AUD を登録します。
 
 1. Cloudflare ダッシュボード > **Workers & Pages** > **`sake-collection`** を開きます。
 2. **Settings** > **Environment variables** を開きます。
@@ -208,10 +210,9 @@ Pages Functions（`/api/sync-config`）が Access JWT の完全検証を行い�
 | `SAKE_GAS_URL` | Secret | 手順 2.4 で控えた GAS ウェブアプリ URL (`https://script.google.com/macros/s/<DEPLOYMENT_ID>/exec`) | **Production と Preview の両方** |
 | `SAKE_GAS_PASSPHRASE` | Secret | 手順 2.3 で設定した `SYNC_PASSPHRASE` と同一の文字列 | **Production と Preview の両方** |
 | `SAKE_ACCESS_TEAM_DOMAIN` | Secret | 手順 3.2 で確認したチームドメイン (`<your-team-name>.cloudflareaccess.com`) | **Production と Preview の両方** |
-| `SAKE_ACCESS_AUD` | Secret | 手順 3.2 で控えた **本番用 Application（`*.pages.dev` 用）の AUD** | **Production 環境のみ** |
-| `SAKE_ACCESS_AUD` | Secret | 手順 3.2 で控えた **プレビュー用 Application（`*.sake-collection.pages.dev` 用）の AUD** | **Preview 環境のみ** |
+| `SAKE_ACCESS_AUD` | Secret | 手順 3.2 で控えた共通の Audience Tag (AUD) | **Production と Preview の両方（同じ値）** |
 
-※Cloudflare Pages の Environment variables 画面では、変数ごとに「Production」と「Preview」で個別の値を登録できます。`SAKE_GAS_URL`, `SAKE_GAS_PASSPHRASE`, `SAKE_ACCESS_TEAM_DOMAIN` の3点は両環境共通の値を設定し、`SAKE_ACCESS_AUD` のみそれぞれの環境に対応する AUD を登録してください。
+※本番用・プレビュー用の両環境で AUD は共通の1つの値となるため、上記4つの Secret 環境変数（`SAKE_GAS_URL`, `SAKE_GAS_PASSPHRASE`, `SAKE_ACCESS_TEAM_DOMAIN`, `SAKE_ACCESS_AUD`）はすべて Production と Preview の両環境に同一の値を登録します。
 
 4. 設定保存後、最新のデプロイメントに対して **「Retry deployment」**（再デプロイ）を実行し、環境変数を反映させます。
 
@@ -219,17 +220,20 @@ Pages Functions（`/api/sync-config`）が Access JWT の完全検証を行い�
 本番 URL とハッシュ付き個別 Preview URL の両方で、未認証アクセスが確実に遮断され、本人のみアクセスできることを確認します。
 
 1. **未認証アクセスの遮断確認（本番 URL およびハッシュ付き Preview URL）**:
-   - Cloudflare Pages の **Deployments** 一覧から、直近のプレビューデプロイの個別ハッシュ付き URL（例: `https://<deployment-hash>.sake-collection.pages.dev`）をコピーします。
+   - Cloudflare Pages の **Deployments** 一覧から、直近のプレビューデプロイの個別ハッシュ付き URL（例: `https://<deployment-hash>.sake-collection-cs2.pages.dev`）をコピーします。
    - ブラウザのシークレットウィンドウを開き、以下の2つの URL に順にアクセスします：
-     - 本番 URL: `https://sake-collection.pages.dev`
-     - ハッシュ付き Preview URL: `https://<deployment-hash>.sake-collection.pages.dev`
-   - 両方の URL で、ページ本体が表示されることなく即座に Cloudflare Access の Google ログイン画面へリダイレクトされることを確認します。
-   - 許可されていない別のアカウントでログインを試み、アクセスが拒否（403 Forbidden または Access Denied）されることを確認します。
+     - 本番 URL: `https://sake-collection-cs2.pages.dev`
+     - ハッシュ付き Preview URL: `https://<deployment-hash>.sake-collection-cs2.pages.dev`
+   - 両方の URL で、ページ本体が表示されることなく即座に Cloudflare Access の認証画面（メールアドレス入力画面）へリダイレクトされることを確認します。
+   - 許可されていない別のアドレスを入力してログインコード送信を試みてもコードが届かない、またはコード認証でアクセスが拒否（403 Forbidden または Access Denied）されることを確認します。
 2. **本人ログインと自動設定取得の確認**:
-   - 本人の Google アカウントでログインし、sake-collection のメイン画面が表示されることを確認します（本番 URL および Preview URL の両方）。
+   - 本人のメールアドレスを入力して受信したワンタイムログインコードを入力し、sake-collection のメイン画面が表示されることを確認します（本番 URL および Preview URL の両方）。
    - 画面下部「データ管理」タブを開き、最上部の同期カードを確認します。
    - 「⚙️ 同期設定・バックアップ・初期化を開く」を展開し、同期接続設定のステータスが **「サーバーから自動取得済み」**（緑色）になっていることを確認します。
    - 「接続テスト (ping)」ボタンをクリックし、**「接続成功 (sake-collection サーバーと正常に通信できました)」** と表示されることを確認します。
+
+> **実地確認実績（2026-11-11）**:
+> 本構成（本番手動 Self-hosted＋プレビュー Pages 自動生成、共通 AUD、メール宛ワンタイムログインコード認証）にて、実データを用いた新規登録 →「今すぐ同期」→ 空のブラウザ（スマートフォン）からの復元までの一連のフローが正常に完了することを確認済みです。
 
 ---
 
@@ -243,8 +247,8 @@ Pages Functions（`/api/sync-config`）が Access JWT の完全検証を行い�
 | 2 | **Google Drive フォルダ** | フォルダ名が `sake-collection-photos` であり、固有のフォルダ ID を持ち、共有設定が「制限付き」であること。他アプリのフォルダと一切混同していないこと。 | [ ] 独立確認 |
 | 3 | **Google スプレッドシート** | ファイル名が `sake-collection-db` であり、固有のシート ID を持つこと。他アプリのシートと共有していないこと。 | [ ] 独立確認 |
 | 4 | **GAS プロジェクト** | プロジェクト名が `sake-collection-sync` であり、固有のデプロイ URL を持つこと。スクリプトプロパティの合言葉・各リソース ID が専用のものであること。 | [ ] 独立確認 |
-| 5 | **Cloudflare Pages** | プロジェクト名が `sake-collection` であり、`sake-collection.pages.dev` で稼働していること。環境変数が `SAKE_*` プレフィックスで管理されていること。 | [ ] 独立確認 |
-| 6 | **Cloudflare Access** | Pages が生成した `sake-collection` の本番用・プレビュー用の2つの Access Application であり、対象ドメインが本番および個別プレビュー URL に限定され、他アプリと分離した固有の AUD を持っていること。 | [ ] 独立確認 |
+| 5 | **Cloudflare Pages** | プロジェクト名が `sake-collection` であり、`sake-collection-cs2.pages.dev` で稼働していること。環境変数が `SAKE_*` プレフィックスで管理されていること。 | [ ] 独立確認 |
+| 6 | **Cloudflare Access** | `sake-collection-cs2.pages.dev` 用の手動作成 Application と `*.sake-collection-cs2.pages.dev` 用の Pages 生成 Application の2件であり、対象ドメインが本番および個別プレビュー URL に限定され、他アプリと分離した固有の共通 AUD を持っていること。 | [ ] 独立確認 |
 
 ---
 
@@ -253,11 +257,11 @@ Pages Functions（`/api/sync-config`）が Access JWT の完全検証を行い�
 すべてのリソースが構築された後、設計書 §7 に定める以下の受入シナリオを実施します。
 
 ### シナリオ 1: 本人限定アクセスの確認（本番 URL およびハッシュ付き Preview URL）
-1. Cloudflare Pages のデプロイ一覧から、ハッシュ付きの個別 Preview URL（`https://<deployment-hash>.sake-collection.pages.dev`）を取得します。
-2. シークレットウィンドウを開き、本番 URL（`https://sake-collection.pages.dev`）およびハッシュ付き Preview URL の両方に未認証でアクセスします。
-3. いずれの URL でもコンテンツが表示されず、即座に Cloudflare Access の Google ログイン画面へリダイレクトされることを確認します。
-4. 許可リストに含まれない別のアカウントでログインを試み、アクセスが拒否（403 Forbidden 等）されることを確認します。
-5. 本人の Google アカウントでログインし、本番・Preview の両方で正常にアプリが表示されることを確認します。
+1. Cloudflare Pages のデプロイ一覧から、ハッシュ付きの個別 Preview URL（`https://<deployment-hash>.sake-collection-cs2.pages.dev`）を取得します。
+2. シークレットウィンドウを開き、本番 URL（`https://sake-collection-cs2.pages.dev`）およびハッシュ付き Preview URL の両方に未認証でアクセスします。
+3. いずれの URL でもコンテンツが表示されず、即座に Cloudflare Access の認証画面（メールアドレス入力画面）へリダイレクトされることを確認します。
+4. 許可リストに含まれない別のアカウント・アドレスでログインを試みてもアクセスが拒否されることを確認します。
+5. 本人のメールアドレス宛に届いたワンタイムログインコードで認証し、本番・Preview の両方で正常にアプリが表示されることを確認します。
 
 ### シナリオ 2: 飲んだ記録での「また買いたい」絞り込み確認
 1. アプリ上で「飲んだ記録」タブを開きます。
@@ -273,8 +277,8 @@ Pages Functions（`/api/sync-config`）が Access JWT の完全検証を行い�
 5. Google Drive（`sake-collection-photos`）を開き、アップロードされた画像ファイルが作成されていることを確認します。
 
 ### シナリオ 4: 新規空端末からのワンタップ完全復元（スマホ受入確認）
-1. スマートフォン（iPhone / Android）のブラウザで `https://sake-collection.pages.dev` を開きます。
-2. Cloudflare Access の Google ログイン画面が表示されるので、本人のアカウントでログインします。
+1. スマートフォン（iPhone / Android）のブラウザで `https://sake-collection-cs2.pages.dev` を開きます。
+2. Cloudflare Access の認証画面が表示されるので、本人のメールアドレス宛に届いたワンタイムログインコードでログインします。
 3. データ0件の状態で開くと、トップ画面最上部に **「クラウドからデータを復元（今すぐ同期）」** の目立つ案内バナーが表示されていることを確認します。
 4. バナー内のボタンをタップします。
 5. 同期オーケストレーターが自動的に設定を取得し、Google 側からボトルデータと写真を一括ダウンロードして IndexedDB に復元することを確認します。
@@ -333,7 +337,7 @@ Pages Functions（`/api/sync-config`）が Access JWT の完全検証を行い�
 ### 6.5 トラブルシューティング（FAQ）
 
 #### Q1. 「同期設定を確認中...」または設定自動取得でエラーになる
-- **原因 1**: Cloudflare Access のセッションが切れている可能性があります。ブラウザを再読み込みし、Google ログイン画面が表示されたら再認証してください。
+- **原因 1**: Cloudflare Access のセッションが切れている可能性があります。ブラウザを再読み込みし、認証画面が表示されたら本人のメールアドレス宛のログインコードで再認証してください。
 - **原因 2**: Pages の環境変数（`SAKE_ACCESS_TEAM_DOMAIN` または `SAKE_ACCESS_AUD`）が誤っている可能性があります。手順 3.2 と 3.3 を確認してください。
 
 #### Q2. 接続テスト (ping) で「合言葉が違います」と表示される
