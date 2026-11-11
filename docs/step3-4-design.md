@@ -87,7 +87,7 @@ GAS は Cloudflare Access とは独立した境界として、スクリプトプ
 | 3 | **Google Sheets** | 新規作成した `sake-collection-db` 専用スプレッドシート ID | GAS の `SPREADSHEET_ID` が Smart Closet と異なること、`SyncMeta` の `appIdentifier` が `'sake-collection'` であることを確認 |
 | 4 | **GAS プロジェクト** | 新規作成した `sake-collection-sync` プロジェクト＆専用デプロイ URL | Web App URL・スクリプト ID・合言葉が Smart Closet と完全に別であることを確認 |
 | 5 | **Cloudflare Pages プロジェクト** | 新規作成した `sake-collection` Pages プロジェクト（`sake-collection-cs2.pages.dev`） | Cloudflare ダッシュボード上で別プロジェクトとして作成され、Smart Closet の Pages に一切触れないことを確認 |
-| 6 | **Cloudflare Access の許可設定** | `sake-collection-cs2.pages.dev` 用の手動作成 Application と `*.sake-collection-cs2.pages.dev` 用の Pages 生成 Application | Zero Trust > Access > Applications で独立した Application として登録され、本人のメールアドレス宛ログインコード認証のみ許可（共通 AUD）されていることを確認 |
+| 6 | **Cloudflare Access の許可設定** | `sake-collection-cs2.pages.dev` 用の手動作成 Application と `*.sake-collection-cs2.pages.dev` 用の Pages 生成 Application | Zero Trust > Access > Applications で独立した Application として登録され、本人のメールアドレス宛ログインコード認証のみ許可（環境ごとに別値の AUD）されていることを確認 |
 
 ---
 
@@ -237,14 +237,14 @@ sequenceDiagram
      - **本番用 Application（手動作成）**: Zero Trust > Access > Applications から Self-hosted Application を新規作成し、Application domain に `sake-collection-cs2.pages.dev`（apex ドメイン）を指定する。
      - **プレビュー用 Application（Pages 自動生成）**: Cloudflare Pages > `sake-collection` > Settings > General > Access policy にて **「Enable access policy」** を有効化して生成される Application（Application domain: `*.sake-collection-cs2.pages.dev`）を使用する。
    - **本人限定ポリシーの設定**: 両アプリケーションとも、Policy（Allow）は **ユーザー本人のメールアドレスのみ（Selector: `Emails`）許可** とする（認証画面はメール宛ワンタイムログインコード送信方式）。
-   - **共通 AUD の取得**: Audience Tag（AUD）は本番用・プレビュー用の両環境で **共通の1つの値** を使用する。Application の Overview 画面から AUD を控え、Zero Trust の自組織チームドメイン（`<your-team-name>.cloudflareaccess.com`）を確認する。
+   - **Audience Tag (AUD) の取得（環境ごとに別値）**: AUD は環境（Application）ごとに別々の値となるため、本番用 Application（apex）およびプレビュー用 Application それぞれの Overview 画面からそれぞれの AUD を控える。あわせて Zero Trust の自組織チームドメイン（`<your-team-name>.cloudflareaccess.com`）を確認する。
 4. **Access 保護の動作確認と Pages Secret 環境変数の登録**
    - シークレットウィンドウで本番 URL（`https://sake-collection-cs2.pages.dev`）およびハッシュ付き Preview URL の両方を開き、Cloudflare Access の認証画面（メールアドレス入力画面）が強制表示されること、本人以外のアカウント・アドレスでは拒否されることを確認する。
    - 確認後、Cloudflare Pages > `sake-collection` > Settings > Environment variables にて、以下の Secret（Encrypt）環境変数を登録し、再デプロイする：
      - `SAKE_GAS_URL`：（手順1の GAS Web App URL、Production と Preview の両方）
      - `SAKE_GAS_PASSPHRASE`：（手順1の `SYNC_PASSPHRASE` と同じ合言葉、Production と Preview の両方）
      - `SAKE_ACCESS_TEAM_DOMAIN`：（チームドメイン、Production と Preview の両方）
-     - `SAKE_ACCESS_AUD`：手順3で控えた共通の AUD（**Production と Preview の両方に同一の値を登録**）
+     - `SAKE_ACCESS_AUD`：環境ごとに対応する Application の AUD を登録（**Production 環境には本番用 AUD、Preview 環境にはプレビュー用 AUD**）
 
 ### (2) エージェント側とユーザー手作業の切り分け
 

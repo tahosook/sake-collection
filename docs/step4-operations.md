@@ -189,9 +189,9 @@ Cloudflare ダッシュボードにログインし、本番およびプレビュ
 3. **認証（ログイン）方式の実態（メール宛ログインコード送信方式）**:
    - Cloudflare Access の認証画面は、メールアドレスを入力するとワンタイムログインコード（PIN）がメール送信され、そのコードを入力して認証する方式（One-time PIN）となります（Google ログインボタンは表示されません）。
 
-4. **共通の Audience Tag (AUD) の取得**:
-   - AUD は本番用・プレビュー用の両環境で **共通の1つの値** を使用します。
-   - Application の **Overview** 画面に表示されている Audience Tag（AUD）文字列をコピーして安全に控えます。
+4. **Audience Tag (AUD) の取得（環境ごとに別値）**:
+   - AUD は Application ごとに別々の値となります。本番用 Application（apex）の AUD と、プレビュー用 Application の AUD の両方を控えます。
+   - Zero Trust > **Access** > **Applications** から、本番用 Application（`sake-collection-cs2.pages.dev`）およびプレビュー用 Application（`*.sake-collection-cs2.pages.dev`）それぞれの **Overview** 画面を開き、表示されている Audience Tag（AUD）文字列をコピーして安全に控えます。
 
 5. **チームドメイン（Team Domain）の確認**:
    - Zero Trust > Settings > Custom Pages または Overview から、自組織のチームドメインを確認して控えます。
@@ -199,7 +199,7 @@ Cloudflare ダッシュボードにログインし、本番およびプレビュ
 
 ### 3.3 Pages Secret 環境変数の登録
 Pages Functions（`/api/sync-config`）が Access JWT の完全検証を行い、GAS URL と合言葉を安全にクライアントへ返すための環境変数を設定します。
-本番 Application とプレビュー Application で AUD は共通の1つの値となっているため、`SAKE_ACCESS_AUD` には Production・Preview の両環境に同一の AUD を登録します。
+実装（`functions/api/sync-config.ts`）は環境ごとに単一の AUD を検証する仕様となっているため、`SAKE_ACCESS_AUD` は環境ごとにその環境に対応する Application の AUD を登録します（Production 環境には本番用 Application の AUD、Preview 環境にはプレビュー用 Application の AUD）。
 
 1. Cloudflare ダッシュボード > **Workers & Pages** > **`sake-collection`** を開きます。
 2. **Settings** > **Environment variables** を開きます。
@@ -210,9 +210,10 @@ Pages Functions（`/api/sync-config`）が Access JWT の完全検証を行い�
 | `SAKE_GAS_URL` | Secret | 手順 2.4 で控えた GAS ウェブアプリ URL (`https://script.google.com/macros/s/<DEPLOYMENT_ID>/exec`) | **Production と Preview の両方** |
 | `SAKE_GAS_PASSPHRASE` | Secret | 手順 2.3 で設定した `SYNC_PASSPHRASE` と同一の文字列 | **Production と Preview の両方** |
 | `SAKE_ACCESS_TEAM_DOMAIN` | Secret | 手順 3.2 で確認したチームドメイン (`<your-team-name>.cloudflareaccess.com`) | **Production と Preview の両方** |
-| `SAKE_ACCESS_AUD` | Secret | 手順 3.2 で控えた共通の Audience Tag (AUD) | **Production と Preview の両方（同じ値）** |
+| `SAKE_ACCESS_AUD` | Secret | 手順 3.2 で控えた本番用 Application（apex 用）の AUD | **Production 環境のみ** |
+| `SAKE_ACCESS_AUD` | Secret | 手順 3.2 で控えたプレビュー用 Application（`*.sake-collection-cs2.pages.dev` 用）の AUD | **Preview 環境のみ** |
 
-※本番用・プレビュー用の両環境で AUD は共通の1つの値となるため、上記4つの Secret 環境変数（`SAKE_GAS_URL`, `SAKE_GAS_PASSPHRASE`, `SAKE_ACCESS_TEAM_DOMAIN`, `SAKE_ACCESS_AUD`）はすべて Production と Preview の両環境に同一の値を登録します。
+※Cloudflare Pages の Environment variables 画面では、変数ごとに「Production」と「Preview」で個別の値を登録できます。`SAKE_GAS_URL`, `SAKE_GAS_PASSPHRASE`, `SAKE_ACCESS_TEAM_DOMAIN` の3点は両環境共通の値を設定し、`SAKE_ACCESS_AUD` のみそれぞれの環境に対応する AUD を登録してください。
 
 4. 設定保存後、最新のデプロイメントに対して **「Retry deployment」**（再デプロイ）を実行し、環境変数を反映させます。
 
@@ -233,7 +234,7 @@ Pages Functions（`/api/sync-config`）が Access JWT の完全検証を行い�
    - 「接続テスト (ping)」ボタンをクリックし、**「接続成功 (sake-collection サーバーと正常に通信できました)」** と表示されることを確認します。
 
 > **実地確認実績（2026-11-11）**:
-> 本構成（本番手動 Self-hosted＋プレビュー Pages 自動生成、共通 AUD、メール宛ワンタイムログインコード認証）にて、実データを用いた新規登録 →「今すぐ同期」→ 空のブラウザ（スマートフォン）からの復元までの一連のフローが正常に完了することを確認済みです。
+> 本構成（本番手動 Self-hosted＋プレビュー Pages 自動生成、環境別 AUD、メール宛ワンタイムログインコード認証）にて、実データを用いた新規登録 →「今すぐ同期」→ 空のブラウザ（スマートフォン）からの復元までの一連のフローが正常に完了することを確認済みです。
 
 ---
 
@@ -248,7 +249,7 @@ Pages Functions（`/api/sync-config`）が Access JWT の完全検証を行い�
 | 3 | **Google スプレッドシート** | ファイル名が `sake-collection-db` であり、固有のシート ID を持つこと。他アプリのシートと共有していないこと。 | [ ] 独立確認 |
 | 4 | **GAS プロジェクト** | プロジェクト名が `sake-collection-sync` であり、固有のデプロイ URL を持つこと。スクリプトプロパティの合言葉・各リソース ID が専用のものであること。 | [ ] 独立確認 |
 | 5 | **Cloudflare Pages** | プロジェクト名が `sake-collection` であり、`sake-collection-cs2.pages.dev` で稼働していること。環境変数が `SAKE_*` プレフィックスで管理されていること。 | [ ] 独立確認 |
-| 6 | **Cloudflare Access** | `sake-collection-cs2.pages.dev` 用の手動作成 Application と `*.sake-collection-cs2.pages.dev` 用の Pages 生成 Application の2件であり、対象ドメインが本番および個別プレビュー URL に限定され、他アプリと分離した固有の共通 AUD を持っていること。 | [ ] 独立確認 |
+| 6 | **Cloudflare Access** | `sake-collection-cs2.pages.dev` 用の手動作成 Application と `*.sake-collection-cs2.pages.dev` 用の Pages 生成 Application の2件であり、対象ドメインが本番および個別プレビュー URL に限定され、他アプリと分離した固有の AUD（本番・プレビューそれぞれ別値）を持っていること。 | [ ] 独立確認 |
 
 ---
 
