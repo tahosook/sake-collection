@@ -2,8 +2,9 @@ import React, { useState } from 'react';
 import { SakeCategory } from '../types/sake';
 import {
   buildGeminiConsultationPrompt,
-  parseAndValidateGeminiJson,
+  parseAndValidateGeminiInput,
   GeminiImportPayload,
+  GeminiBatchValidationResult,
 } from '../domain/geminiPrompt';
 import { getTodayDateString } from '../domain/bottleUtils';
 import { CopyIcon, CheckIcon, SparklesIcon } from './Icons';
@@ -11,12 +12,16 @@ import { CopyIcon, CheckIcon, SparklesIcon } from './Icons';
 export interface GeminiConsultSectionProps {
   categoryHint?: SakeCategory;
   onImportPayload: (payload: GeminiImportPayload) => { skippedFields: string[] };
+  onImportBatch?: (batchResult: GeminiBatchValidationResult) => void;
+  isEditing?: boolean;
   disabled?: boolean;
 }
 
 export const GeminiConsultSection: React.FC<GeminiConsultSectionProps> = ({
   categoryHint = '日本酒',
   onImportPayload,
+  onImportBatch,
+  isEditing = false,
   disabled = false,
 }) => {
   const [isOpen, setIsOpen] = useState<boolean>(true);
@@ -72,17 +77,49 @@ export const GeminiConsultSection: React.FC<GeminiConsultSectionProps> = ({
     }
 
     const todayDate = getTodayDateString();
-    const result = parseAndValidateGeminiJson(trimmed, { todayDate });
+    const result = parseAndValidateGeminiInput(trimmed, { todayDate });
 
-    if (!result.success) {
-      setErrors(result.errors);
+    // 1. 配列データの場合
+    if (result.kind === 'batch') {
+      // 編集モードでの配列取り込みの禁止 (設計 §3.1)
+      if (isEditing) {
+        setErrors([
+          '複数銘柄の配列データは新規登録時のみ取り込めます。既存ボトルの編集では単一のお酒データを取り込んでください。',
+        ]);
+        return;
+      }
+
+      // 上限超過や構文異常などの全体エラー
+      if (result.result.globalErrors.length > 0) {
+        setErrors(result.result.globalErrors);
+        return;
+      }
+
+      // 有効件数が 0 件の場合
+      if (result.result.validCount === 0) {
+        const itemErrors = result.result.items
+          .filter((it): it is typeof it & { success: false } => !it.success)
+          .flatMap((it) => it.errors.map((e) => `${it.index + 1}本目: ${e}`));
+        setErrors(['登録可能なデータがありません。各要素の内容を確認してください。', ...itemErrors]);
+        return;
+      }
+
+      // 1件以上有効な場合は一括確認モーダルを起動
+      onImportBatch?.(result.result);
+      setJsonText('');
+      return;
+    }
+
+    // 2. 単一オブジェクトの場合 (従来フローの完全維持)
+    if (!result.result.success) {
+      setErrors(result.result.errors);
       return;
     }
 
     // 成功時: 親コンポーネントに反映
-    const res = onImportPayload(result.data);
-    setLastImportedName(result.data.name);
-    setWarnings(result.warnings);
+    const res = onImportPayload(result.result.data);
+    setLastImportedName(result.result.data.name);
+    setWarnings(result.result.warnings);
     setSkippedFields(res.skippedFields);
     setJsonText('');
   };

@@ -15,6 +15,7 @@ import {
   CreateBottleInput,
   findDuplicateBottles,
   createReuseDraftFromBottle,
+  createBottlesFromGeminiBatch,
 } from '../domain/bottleUtils';
 import { CATEGORY_ATTRIBUTE_LABELS } from '../domain/categories';
 import { isValidCalendarDate } from '../domain/validation';
@@ -29,11 +30,13 @@ import { generateUuid } from '../domain/uuid';
 import {
   mergeGeminiPayloadIntoBottle,
   GeminiImportPayload,
+  GeminiBatchValidationResult,
 } from '../domain/geminiPrompt';
 import { CloseIcon, PlusIcon, TrashIcon, ArrowPathIcon } from './Icons';
 import { PhotoManagerSection } from './PhotoManagerSection';
 import { GeminiConsultSection } from './GeminiConsultSection';
 import { ReuseBottlePickerModal } from './ReuseBottlePickerModal';
+import { GeminiBatchImportModal } from './GeminiBatchImportModal';
 
 export interface BottleFormModalProps {
   initialBottle?: BottleRecord | null;
@@ -48,6 +51,10 @@ export interface BottleFormModalProps {
       draftPhotos?: PhotoRecord[];
     }
   ) => Promise<void>;
+  onBatchSubmit?: (
+    bottles: BottleRecord[],
+    photosToSave: PhotoRecord[]
+  ) => Promise<void>;
 }
 
 export const BottleFormModal: React.FC<BottleFormModalProps> = ({
@@ -57,13 +64,60 @@ export const BottleFormModal: React.FC<BottleFormModalProps> = ({
   isOpen,
   onClose,
   onSubmit,
+  onBatchSubmit,
 }) => {
   const isEditing = Boolean(initialBottle);
   // 一時的なボトルID（新規登録時の写真の関連付け用）
   const tempBottleId = useMemo(() => initialBottle?.id ?? generateUuid(), [initialBottle?.id]);
 
-  // モーダル管理（流用ピッカー）
+  // モーダル管理（流用ピッカー・Gemini一括取り込み）
   const [isReuseModalOpen, setIsReuseModalOpen] = useState<boolean>(false);
+  const [batchImportResult, setBatchImportResult] = useState<GeminiBatchValidationResult | null>(null);
+  const [isBatchModalOpen, setIsBatchModalOpen] = useState<boolean>(false);
+
+  const handleImportBatch = (batchResult: GeminiBatchValidationResult) => {
+    setBatchImportResult(batchResult);
+    setIsBatchModalOpen(true);
+  };
+
+  const handleBatchModalSubmit = async (
+    selectedPayloads: GeminiImportPayload[],
+    selectedPhotos: Array<PhotoRecord | null>
+  ) => {
+    if (onBatchSubmit) {
+      const { bottles, photosToSave } = createBottlesFromGeminiBatch(
+        selectedPayloads,
+        selectedPhotos
+      );
+      await onBatchSubmit(bottles, photosToSave);
+    } else {
+      for (let i = 0; i < selectedPayloads.length; i++) {
+        const item = selectedPayloads[i]!;
+        const photo = selectedPhotos[i];
+        await onSubmit(
+          {
+            name: item.name,
+            category: item.category,
+            abv: item.abv,
+            volumeMl: item.volumeMl,
+            categoryAttributes: item.categoryAttributes,
+            status: 'unopened',
+            description: item.description,
+            sources: item.sources,
+            referencePrice: item.referencePrice,
+            photoIds: photo ? [photo.id] : [],
+            primaryPhotoId: photo ? photo.id : null,
+          },
+          {
+            quantity: 1,
+            draftPhotos: photo ? [photo] : [],
+          }
+        );
+      }
+    }
+    setIsBatchModalOpen(false);
+    onClose();
+  };
 
   // フォーム状態の初期化
   const [name, setName] = useState<string>(initialBottle?.name ?? '');
@@ -768,6 +822,8 @@ export const BottleFormModal: React.FC<BottleFormModalProps> = ({
             <GeminiConsultSection
               categoryHint={category}
               onImportPayload={handleImportGeminiPayload}
+              onImportBatch={handleImportBatch}
+              isEditing={isEditing}
               disabled={isSubmitting}
             />
 
@@ -1305,6 +1361,22 @@ export const BottleFormModal: React.FC<BottleFormModalProps> = ({
           photos={photos}
           onClose={() => setIsReuseModalOpen(false)}
           onSelectBottle={handleSelectReuse}
+        />
+      )}
+
+      {/* Gemini 複数銘柄一括取り込み確認モーダル */}
+      {isBatchModalOpen && batchImportResult && (
+        <GeminiBatchImportModal
+          isOpen={isBatchModalOpen}
+          batchResult={batchImportResult}
+          draftPhotos={draftPhotos}
+          primaryPhotoId={primaryPhotoId}
+          allBottles={allBottles}
+          onClose={() => {
+            setIsBatchModalOpen(false);
+            setBatchImportResult(null);
+          }}
+          onSubmitBatch={handleBatchModalSubmit}
         />
       )}
     </>
