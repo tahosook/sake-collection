@@ -57,12 +57,12 @@ export const BottleHistoryList: React.FC<BottleHistoryListProps> = ({
             className="w-full min-h-touch text-left p-3 bg-white rounded-2xl border border-stone-200 hover:border-stone-400 shadow-sm hover:shadow transition active:scale-[0.99] flex items-center gap-3.5"
           >
             {/* サムネイル */}
-            <div className="w-16 h-16 rounded-xl bg-stone-100 overflow-hidden shrink-0 flex items-center justify-center border border-stone-200">
+            <div className="w-14 h-[72px] rounded-xl bg-stone-100 overflow-hidden shrink-0 flex items-center justify-center border border-stone-200">
               {photo ? (
                 <img
                   src={photo.dataUrl}
                   alt={bottle.name}
-                  className="w-full h-full object-cover"
+                  className="w-full h-full object-contain"
                   loading="lazy"
                 />
               ) : (
