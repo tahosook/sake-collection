@@ -215,6 +215,29 @@ export const App: React.FC = () => {
     }
   };
 
+  // 複数銘柄の一括登録ハンドラー（Gemini 配列一括取り込み）
+  const handleBatchSubmit = async (
+    bottlesToSave: BottleRecord[],
+    photosToSave: PhotoRecord[]
+  ) => {
+    await saveBottlesBatch(bottlesToSave, photosToSave, []);
+
+    // 状態に応じた一覧画面へ切り替え (PR #5 規則)
+    const firstBottle = bottlesToSave[0];
+    if (firstBottle) {
+      if (firstBottle.status === 'finished') {
+        setActiveTab('finished');
+        setHistorySubTab('finished');
+      } else if (firstBottle.status === 'disposed') {
+        setActiveTab('finished');
+        setHistorySubTab('disposed');
+      } else {
+        setActiveTab('inventory');
+      }
+      setSelectedBottleForDetail(firstBottle);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-stone-100 text-stone-900 pb-24 select-none sm:select-auto">
       {/* グローバルヘッダー */}
@@ -465,6 +488,7 @@ export const App: React.FC = () => {
             setEditingBottle(null);
           }}
           onSubmit={handleFormSubmit}
+          onBatchSubmit={handleBatchSubmit}
         />
       )}
 

@@ -595,13 +595,21 @@ export function parseAndValidateGeminiJson(
 /**
  * Gemini バッチ取り込みの個別要素検証結果型
  */
-export interface GeminiBatchItemValidationResult {
-  index: number;
-  success: boolean;
-  data?: GeminiImportPayload;
-  errors: string[];
-  warnings: string[];
-}
+export type GeminiBatchItemValidationResult =
+  | {
+      index: number;
+      success: true;
+      data: GeminiImportPayload;
+      errors: string[];
+      warnings: string[];
+    }
+  | {
+      index: number;
+      success: false;
+      data?: never;
+      errors: string[];
+      warnings: string[];
+    };
 
 /**
  * Gemini バッチ取り込みの全体検証結果型
