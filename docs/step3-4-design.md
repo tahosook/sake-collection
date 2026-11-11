@@ -86,8 +86,8 @@ GAS は Cloudflare Access とは独立した境界として、スクリプトプ
 | 2 | **Google Drive フォルダ** | 新規作成した `sake-collection-photos` 専用フォルダ ID | GAS の `DRIVE_FOLDER_ID` が Smart Closet と異なること、フォルダ名が `sake-collection-photos` であることを確認 |
 | 3 | **Google Sheets** | 新規作成した `sake-collection-db` 専用スプレッドシート ID | GAS の `SPREADSHEET_ID` が Smart Closet と異なること、`SyncMeta` の `appIdentifier` が `'sake-collection'` であることを確認 |
 | 4 | **GAS プロジェクト** | 新規作成した `sake-collection-sync` プロジェクト＆専用デプロイ URL | Web App URL・スクリプト ID・合言葉が Smart Closet と完全に別であることを確認 |
-| 5 | **Cloudflare Pages プロジェクト** | 新規作成した `sake-collection` Pages プロジェクト（`sake-collection.pages.dev`） | Cloudflare ダッシュボード上で別プロジェクトとして作成され、Smart Closet の Pages に一切触れないことを確認 |
-| 6 | **Cloudflare Access の許可設定** | `sake-collection.pages.dev` と `*.sake-collection.pages.dev` 専用の Access Application | Zero Trust > Access > Applications で独立した Application として登録され、本人の Google アカウントのみ許可されていることを確認 |
+| 5 | **Cloudflare Pages プロジェクト** | 新規作成した `sake-collection` Pages プロジェクト（`sake-collection-cs2.pages.dev`） | Cloudflare ダッシュボード上で別プロジェクトとして作成され、Smart Closet の Pages に一切触れないことを確認 |
+| 6 | **Cloudflare Access の許可設定** | `sake-collection-cs2.pages.dev` 用の手動作成 Application と `*.sake-collection-cs2.pages.dev` 用の Pages 生成 Application | Zero Trust > Access > Applications で独立した Application として登録され、本人のメールアドレス宛ログインコード認証のみ許可（環境ごとに別値の AUD）されていることを確認 |
 
 ---
 
@@ -216,7 +216,7 @@ sequenceDiagram
 - **理由とセキュリティ境界**：
   1. **平文非保持の厳守**：公開 GitHub リポジトリ、フロントエンドコード（`src/`）、およびビルド成果物（`dist/`）には GAS URL も合言葉も一切含めない（`VITE_*` 環境変数はビルド成果物に埋め込まれるため使用禁止）。
   2. **Access 境界の強制（fail-closed）**：`functions/api/sync-config.ts` は Cloudflare Pages のサーバーレス環境変数（Secret: `SAKE_GAS_URL`, `SAKE_GAS_PASSPHRASE`, `SAKE_ACCESS_TEAM_DOMAIN`, `SAKE_ACCESS_AUD`）を読む。リクエストヘッダーに Cloudflare Access の JWT（`Cf-Access-Jwt-Assertion`）の署名・issuer・audience・有効期限を完全検証し、未設定・検証失敗時は `403 Forbidden` で拒否し、レスポンスには `Cache-Control: no-store` を付与する。
-  3. **新しい端末でのゼロコンフィグ体験**：本人がスマホで Google ログイン（Cloudflare Access）してアプリを開くと、アプリが裏で `/api/sync-config` から接続設定を自動取得して IndexedDB の `meta` ストアにキャッシュするため、長い GAS URL や合言葉を手入力することなく即座に「今すぐ同期」が使える。ローカル開発時（`npm run dev`）は折りたたみ内の手動入力欄から設定できる。
+  3. **新しい端末でのゼロコンフィグ体験**：本人がスマホで Access 認証（メール宛ワンタイムログインコード）を経てアプリを開くと、アプリが裏で `/api/sync-config` から接続設定を自動取得して IndexedDB の `meta` ストアにキャッシュするため、長い GAS URL や合言葉を手入力することなく即座に「今すぐ同期」が使える。ローカル開発時（`npm run dev`）は折りたたみ内の手動入力欄から設定できる。
 
 ---
 
@@ -232,21 +232,19 @@ sequenceDiagram
    - Cloudflare ダッシュボード > Workers & Pages > Create application > Pages > Connect to Git で `tahosook/sake-collection` を選択。
    - プロジェクト名：`sake-collection`、Production branch：`main`、Build command：`npm run build`、Build output directory：`dist`。
    - ※この時点ではまだ環境変数（`SAKE_GAS_URL` 等）は登録しない。
-3. **Cloudflare Access の設定（Pages 生成の2つの Access Application に一本化）**
-   - 手動の Self-hosted Application 作成は行わず、Cloudflare Pages の「Enable access policy」機能によって自動生成される2つの Access Application（本番 `*.pages.dev` 用と個別プレビュー `*.sake-collection.pages.dev` 用）に一本化して設定する。
-   - **Pages 側での有効化**: Cloudflare Pages > `sake-collection` > Settings > General > Access policy にて **「Enable access policy」** を有効化する。
-   - **Known issues の調整**: 自動生成された Preview ポリシーの設定を開き、Application domain に含まれるワイルドカード **`*` サブドメインを削除して保存**する（本番側保護との干渉を防ぐため）。再度 Pages の Settings > General > Access policy に戻り、**「Enable access policy」を選択し直す**（再適用）。
-   - **本人限定ポリシーの設定確認**: Zero Trust > Access > Applications にて、以下の2つのアプリケーションが存在し、両方とも Policy（Allow）が **ユーザー本人の Google アカウントのメールアドレスのみ（Selector: `Emails`）許可** になっていることを確認する：
-     - `*.pages.dev` 用アプリケーション（本番ドメイン用）
-     - `*.sake-collection.pages.dev` 用アプリケーション（個別プレビュー用）
-   - 各アプリケーションの Overview 画面からそれぞれの Audience Tag（AUD）を控え、Zero Trust の自組織チームドメイン（`<your-team-name>.cloudflareaccess.com`）を確認する。
+3. **Cloudflare Access の設定（本番手動 Self-hosted＋プレビュー Pages 自動生成の2件構成）**
+   - Cloudflare Access のアプリケーションは以下の2件構成とする：
+     - **本番用 Application（手動作成）**: Zero Trust > Access > Applications から Self-hosted Application を新規作成し、Application domain に `sake-collection-cs2.pages.dev`（apex ドメイン）を指定する。
+     - **プレビュー用 Application（Pages 自動生成）**: Cloudflare Pages > `sake-collection` > Settings > General > Access policy にて **「Enable access policy」** を有効化して生成される Application（Application domain: `*.sake-collection-cs2.pages.dev`）を使用する。
+   - **本人限定ポリシーの設定**: 両アプリケーションとも、Policy（Allow）は **ユーザー本人のメールアドレスのみ（Selector: `Emails`）許可** とする（認証画面はメール宛ワンタイムログインコード送信方式）。
+   - **Audience Tag (AUD) の取得（環境ごとに別値）**: AUD は環境（Application）ごとに別々の値となるため、本番用 Application（apex）およびプレビュー用 Application それぞれの Overview 画面からそれぞれの AUD を控える。あわせて Zero Trust の自組織チームドメイン（`<your-team-name>.cloudflareaccess.com`）を確認する。
 4. **Access 保護の動作確認と Pages Secret 環境変数の登録**
-   - シークレットウィンドウで本番 URL（`https://sake-collection.pages.dev`）およびハッシュ付き Preview URL の両方を開き、Cloudflare Access の Google ログイン画面が強制表示されること、本人以外のアカウントでは拒否されることを確認する。
+   - シークレットウィンドウで本番 URL（`https://sake-collection-cs2.pages.dev`）およびハッシュ付き Preview URL の両方を開き、Cloudflare Access の認証画面（メールアドレス入力画面）が強制表示されること、本人以外のアカウント・アドレスでは拒否されることを確認する。
    - 確認後、Cloudflare Pages > `sake-collection` > Settings > Environment variables にて、以下の Secret（Encrypt）環境変数を登録し、再デプロイする：
      - `SAKE_GAS_URL`：（手順1の GAS Web App URL、Production と Preview の両方）
      - `SAKE_GAS_PASSPHRASE`：（手順1の `SYNC_PASSPHRASE` と同じ合言葉、Production と Preview の両方）
      - `SAKE_ACCESS_TEAM_DOMAIN`：（チームドメイン、Production と Preview の両方）
-     - `SAKE_ACCESS_AUD`：環境ごとにその環境の Application の AUD を登録（Production 環境には本番用 Application の AUD、Preview 環境にはプレビュー用 Application の AUD）
+     - `SAKE_ACCESS_AUD`：環境ごとに対応する Application の AUD を登録（**Production 環境には本番用 AUD、Preview 環境にはプレビュー用 AUD**）
 
 ### (2) エージェント側とユーザー手作業の切り分け
 
@@ -258,7 +256,7 @@ sequenceDiagram
 | 公開・運用手順書（`docs/step4-operations.md`）の作成 | **エージェント** | 手順と分離チェックリストをリポジトリ内に自己完結で文書化 |
 | Drive フォルダ・Sheets・GAS プロジェクトの作成とスクリプトプロパティ設定・デプロイ | **ユーザー** | 本人の Google アカウント内の非公開リソース作成と OAuth 初回承認が必要なため |
 | Cloudflare Pages プロジェクト作成・Access ポリシー設定・Secret 環境変数登録 | **ユーザー** | Cloudflare ダッシュボード操作および本人のメールアドレス設定（リポジトリ非記載）のため |
-| 実機（スマホ）での Google ログイン・同期・別端末復元の受入確認 | **ユーザー** | 実機および本番環境での最終確認 |
+| 実機（スマホ）でのログイン（メールコード認証）・同期・別端末復元の受入確認 | **ユーザー** | 実機および本番環境での最終確認 |
 
 ---
 
@@ -321,7 +319,7 @@ sequenceDiagram
 1. **飲んだ記録での「また買いたい」絞り込み（ステップ3残り）**：
    - 飲んだ記録画面で「また買いたいのみ」で絞り込みができ、種類フィルタや検索キーワードとも組み合わせて正しく動作すること。詳細画面の状態変更パネルで日付の手修正および空欄化ができること。
 2. **Cloudflare Pages + Access による本人限定公開**：
-   - 本番 URL（`sake-collection.pages.dev`）およびプレビュー URL（`*.sake-collection.pages.dev`）の両方が最初から Cloudflare Access（Google ログイン・本人のみ許可）で保護され、スマートフォンから開けること。
+   - 本番 URL（`sake-collection-cs2.pages.dev`）およびプレビュー URL（`*.sake-collection-cs2.pages.dev`）の両方が最初から Cloudflare Access（メール宛ワンタイムログインコード認証・本人のみ許可）で保護され、スマートフォンから開けること。
 3. **秘匿情報と写真の非公開保護**：
    - リポジトリ、ビルド成果物（`dist/`）、画面側コードに GAS URL・合言葉・Sheet ID・Drive フォルダ ID・メールアドレス・実写真・実データが平文で一切含まれないこと。
    - GAS エンドポイントが合言葉による fail-closed 認証で保護され、合言葉不一致・未設定時は即座に拒否されること。写真が非公開の Drive フォルダに保存され、共有リンク無しで GAS 経由でのみ取得されること。
