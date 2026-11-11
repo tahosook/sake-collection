@@ -18,12 +18,12 @@ export const BottleCard: React.FC<BottleCardProps> = ({ group, photo, onClick })
       className="flex flex-col text-left bg-white rounded-2xl overflow-hidden border border-stone-200 hover:border-stone-400 shadow-sm hover:shadow transition active:scale-[0.98] w-full min-h-touch group"
     >
       {/* 写真エリアまたはプレースホルダー */}
-      <div className="relative aspect-square w-full bg-stone-150 overflow-hidden flex items-center justify-center">
+      <div className="relative aspect-[3/4] w-full bg-stone-100 overflow-hidden flex items-center justify-center">
         {photo ? (
           <img
             src={photo.dataUrl}
             alt={group.name}
-            className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+            className="w-full h-full object-contain"
             loading="lazy"
           />
         ) : (
