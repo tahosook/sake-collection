@@ -310,6 +310,7 @@ function verifyNoRealPhotosOrData(): void {
     'tsconfig.json',
     path.join('gas', 'appsscript.json'),
     'gas/appsscript.json',
+    '.clasp.json',
   ]);
 
   // スキャン除外ディレクトリ

@@ -324,16 +324,73 @@ Pages Functions（`/api/sync-config`）が Access JWT の完全検証を行い�
    - 次回アプリを開いた際に、Pages Functions 経由で新しい合言葉が自動同期されます。
    - ※ローカル開発環境（`localhost`）等で手動入力している端末がある場合は、「同期接続設定」の手動入力欄から合言葉を更新して「保存」します。
 
-### 6.4 GAS コードの更新手順（再デプロイ）
-将来、GAS 側の機能拡張などで `gas/Code.gs` や `gas/appsscript.json` を変更した際の手順です。
+### 6.4 GAS コードの更新手順（clasp による再デプロイ）
+`gas/Code.gs` や `gas/appsscript.json` を変更した際は、clasp（Google Apps Script CLI）を使用してプロジェクトへの反映と版更新を行います。
 
-1. GAS エディタ（`https://script.google.com/`）で `sake-collection-sync` を開きます。
-2. ファイルの内容を最新のコードに更新して保存します。
-3. 画面右上の **「デプロイ」** > **「デプロイを管理」** をクリックします。
-4. 左側のアクティブなデプロイを選択し、右上の鉛筆アイコン（編集）をクリックします。
-5. **「バージョン」** ドロップダウンで **「新バージョン」** を選択します。
-6. 「デプロイ」をクリックします。
-   - ※「デプロイを管理」からバージョンを更新することで、**Web アプリ URL を変えずにコードのみを最新化**できます。Cloudflare 側の環境変数を更新する必要はありません。
+#### 1. 初回セットアップ（端末ごと・初回のみ）
+1. Google アカウントで clasp にログインします（未ログイン時）:
+   ```bash
+   npx clasp login
+   ```
+2. `.clasp.json.sample` をコピーして `.clasp.json` を作成します:
+   ```bash
+   cp .clasp.json.sample .clasp.json
+   ```
+3. 作成した `.clasp.json` を開き、`scriptId` に sake-collection-sync のスクリプト ID を設定します:
+   ```json
+   {
+     "scriptId": "<YOUR_SCRIPT_ID>",
+     "rootDir": "./gas"
+   }
+   ```
+   ※ `.clasp.json` および `.clasprc.json` は `.gitignore` に登録されており、実スクリプト ID や認証トークンを Git にコミットしないよう管理対象外となっています。
+
+#### 2. コードの反映 (push)
+リポジトリの `gas/` ディレクトリの内容を Google Apps Script プロジェクトへ反映します:
+```bash
+npx clasp push
+```
+※ `.claspignore` の設定により、`Code.gs` と `appsscript.json` のみがプロジェクトへ送信されます。
+
+#### 3. Web アプリの版更新 (deploy)
+既存の Web アプリ デプロイメントを新バージョンへ更新します（Web アプリ URL を変えずに最新コードを反映）:
+
+1. 現在のデプロイ一覧を確認し、Web アプリの Deployment ID を取得します:
+   ```bash
+   npx clasp deployments
+   ```
+   表示される一覧から、Web アプリとしてデプロイされている Deployment ID（長い英数字文字列）を確認します。
+2. 既存の Deployment ID を指定して再デプロイ（新バージョンへの版更新）を実行します:
+   ```bash
+   npx clasp deploy -i <DEPLOYMENT_ID> -d "Update: <変更内容の説明>"
+   ```
+   ※ `-i <DEPLOYMENT_ID>` を指定して更新することで、**Web アプリ URL (`https://script.google.com/macros/s/.../exec`) を維持したまま最新コードが有効化されます**。Cloudflare Pages 側の環境変数（`SAKE_GAS_URL`）を再設定する必要はありません。
+   ※ ブラウザの GAS エディタ（`https://script.google.com/`）の「デプロイを管理」画面から新バージョンを選択して保存する方法でも同様に更新可能です。
+
+#### 4. 反映後の疎通確認 (fail-closed 検証)
+デプロイ完了後、Web アプリのエンドポイントに対して直接リクエストを送り、適切な拒否応答が返ることを確認します。
+
+1. **GET リクエストの拒否確認（メソッド制限）**:
+   Web アプリ URL にブラウザまたは curl で直接 GET アクセスし、POST 以外が確実に拒否されることを確認します:
+   ```bash
+   curl -L "<GAS_WEB_APP_URL>"
+   ```
+   レスポンスとして、以下の JSON が返ることを確認します（`doGet` は認証を行わず、メソッド不許可の案内を返します）:
+   ```json
+   {"ok":false,"errorCode":"METHOD_NOT_ALLOWED","message":"sake-collection 同期 API です。POST メソッドのみ許可されています。"}
+   ```
+
+2. **POST リクエストでの合言葉認証確認（fail-closed 認証）**:
+   不正な合言葉を含む POST リクエストを送り、未認証アクセスが確実に遮断されることを確認します:
+   ```bash
+   curl -L "<GAS_WEB_APP_URL>" \
+     -H "Content-Type: application/json" \
+     -d '{"action":"ping","passphrase":"invalid-passphrase"}'
+   ```
+   レスポンスとして、以下の認証エラー JSON が返ることを確認します:
+   ```json
+   {"ok":false,"errorCode":"UNAUTHORIZED","message":"認証に失敗しました（合言葉が正しくありません）"}
+   ```
 
 ### 6.5 トラブルシューティング（FAQ）
 
