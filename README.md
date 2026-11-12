@@ -8,6 +8,10 @@
 - [要件定義書](docs/requirements.md)
 - [全体設計書](docs/architecture.md)
 - [ステップ1 詳細設計・受入条件](docs/step1-design.md)
+- [ステップ2 詳細設計・受入条件](docs/step2-design.md)
+- [ステップ3の残り・ステップ4 詳細設計](docs/step3-4-design.md)
+- [Gemini 一括取り込み 機能詳細設計](docs/gemini-batch-import-design.md)
+- [公開・運用手順書](docs/step4-operations.md)
 - 開発ルール：[AGENTS.md](AGENTS.md)
 
 ## 検証
