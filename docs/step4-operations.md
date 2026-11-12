@@ -368,14 +368,29 @@ npx clasp push
    ※ ブラウザの GAS エディタ（`https://script.google.com/`）の「デプロイを管理」画面から新バージョンを選択して保存する方法でも同様に更新可能です。
 
 #### 4. 反映後の疎通確認 (fail-closed 検証)
-デプロイ完了後、Web アプリの URL にブラウザまたは curl で直接 GET アクセスし、未認証アクセスが確実に遮断されること（fail-closed）を確認します:
-```bash
-curl -L "<GAS_WEB_APP_URL>"
-```
-レスポンスとして、以下の認証エラー JSON が返ることを確認します:
-```json
-{"ok":false,"error":"認証に失敗しました（合言葉が一致しません）"}
-```
+デプロイ完了後、Web アプリのエンドポイントに対して直接リクエストを送り、適切な拒否応答が返ることを確認します。
+
+1. **GET リクエストの拒否確認（メソッド制限）**:
+   Web アプリ URL にブラウザまたは curl で直接 GET アクセスし、POST 以外が確実に拒否されることを確認します:
+   ```bash
+   curl -L "<GAS_WEB_APP_URL>"
+   ```
+   レスポンスとして、以下の JSON が返ることを確認します（`doGet` は認証を行わず、メソッド不許可の案内を返します）:
+   ```json
+   {"ok":false,"errorCode":"METHOD_NOT_ALLOWED","message":"sake-collection 同期 API です。POST メソッドのみ許可されています。"}
+   ```
+
+2. **POST リクエストでの合言葉認証確認（fail-closed 認証）**:
+   不正な合言葉を含む POST リクエストを送り、未認証アクセスが確実に遮断されることを確認します:
+   ```bash
+   curl -L -X POST "<GAS_WEB_APP_URL>" \
+     -H "Content-Type: application/json" \
+     -d '{"action":"ping","passphrase":"invalid-passphrase"}'
+   ```
+   レスポンスとして、以下の認証エラー JSON が返ることを確認します:
+   ```json
+   {"ok":false,"errorCode":"UNAUTHORIZED","message":"認証に失敗しました（合言葉が正しくありません）"}
+   ```
 
 ### 6.5 トラブルシューティング（FAQ）
 
