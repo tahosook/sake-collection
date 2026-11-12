@@ -294,10 +294,16 @@ export const BottleFormModal: React.FC<BottleFormModalProps> = ({
       return { hasDuplicate: false, breakdown: { inventory: 0, finished: 0, disposed: 0 }, matches: [] };
     }
     const numVol = volumeMl.trim() ? Number(volumeMl) : null;
+    const rawVintage = category === 'ワイン' ? attributes['vintageYear'] : undefined;
+    const numVintage =
+      rawVintage !== undefined && rawVintage !== null && String(rawVintage).trim() !== ''
+        ? Number(rawVintage)
+        : null;
     const res = findDuplicateBottles(allBottles, {
       name: trimmed,
       category,
       volumeMl: numVol && !isNaN(numVol) ? numVol : null,
+      vintageYear: numVintage && !isNaN(numVintage) ? numVintage : null,
     });
     const matches = res.exactMatches.length > 0 ? res.exactMatches : res.nameMatches;
     return {
@@ -305,7 +311,7 @@ export const BottleFormModal: React.FC<BottleFormModalProps> = ({
       breakdown: res.breakdown,
       matches,
     };
-  }, [name, category, volumeMl, allBottles, isEditing]);
+  }, [name, category, volumeMl, attributes, allBottles, isEditing]);
 
   if (!isOpen) return null;
 

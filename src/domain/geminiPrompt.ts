@@ -87,9 +87,16 @@ export function buildGeminiConsultationPrompt(options: {
   todayDate?: string;
 } = {}): string {
   const today = options.todayDate ?? getTodayDateString();
-  const categoryHintText = options.categoryHint
-    ? `※お酒の種類ヒント: 「${options.categoryHint}」の可能性が高いです。`
-    : '';
+  const categoryHint = options.categoryHint;
+  let categoryHintText = '';
+  if (categoryHint) {
+    const axes = CATEGORY_DESCRIPTION_AXES[categoryHint];
+    categoryHintText = `※お酒の種類ヒント: 「${categoryHint}」の可能性が高いです。
+【${categoryHint}の解説（description）の記述軸】
+- ②味わい: ${axes.tasteAxis}
+- ③背景: ${axes.backgroundAxis}
+- ④飲み方: ${axes.servingAxis}`;
+  }
 
   return `添付した写真（お酒の表ラベル、裏ラベル、箱など）から情報を読み取り、Web検索で裏付けを取った上で、下記のJSON形式のみを出力してください。挨拶や補足文は一切含めず、\`\`\`json\`\`\`のコードブロック1つだけを出力してください。
 
