@@ -13,5 +13,9 @@ local-data/
 *.webp
 *.heic
 
+# clasp (Apps Script CLI 設定・認証情報はリポジトリに入れない)
+.clasp.json
+.clasprc.json
+
 # misc
 .DS_Store
