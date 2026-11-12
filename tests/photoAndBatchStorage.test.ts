@@ -439,20 +439,20 @@ describe('写真処理と保存トランザクション (PR #7)', () => {
       expect(await getAllBottles(false)).toHaveLength(0);
       expect(await getAllPhotos(false)).toHaveLength(0);
 
-      // includeDeleted: true で確認
+      // includeDeleted: true で確認（photoIds は空配列、primaryPhotoId は null に正規化）
       const deletedBottle = await getBottle(bottleId);
       expect(deletedBottle?.deleted).toBe(true);
       expect(deletedBottle?.updatedAt).toBe(deleteTime);
-      expect(deletedBottle?.photoIds).toEqual([photoId1, photoId2]); // photoIds は維持
+      expect(deletedBottle?.photoIds).toEqual([]);
+      expect(deletedBottle?.primaryPhotoId).toBeNull();
 
+      // 未同期写真はローカル photos ストアから即座に物理削除される
       const p1 = await getPhoto(photoId1);
       const p2 = await getPhoto(photoId2);
-      expect(p1?.deleted).toBe(true);
-      expect(p1?.updatedAt).toBe(deleteTime);
-      expect(p2?.deleted).toBe(true);
-      expect(p2?.updatedAt).toBe(deleteTime);
+      expect(p1).toBeUndefined();
+      expect(p2).toBeUndefined();
 
-      // バックアップ整合性（論理削除済み同士でも photo.bottleId === bottle.id が保たれている）
+      // バックアップ整合性（削除済みボトルが photoIds: [] となり、直後のバックアップ検証が成功する）
       const backup = await exportBackupData();
       const backupVal = validateBackupData(backup);
       expect(backupVal.success).toBe(true);

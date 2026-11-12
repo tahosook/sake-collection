@@ -20,10 +20,13 @@ import {
   exportBackupData,
   importBackupData,
   loadSampleData,
+  saveBottleWithPhotos,
+  getPendingDeletedPhotos,
 } from '../src/storage/db';
 import { SAMPLE_BOTTLES, SAMPLE_PHOTOS } from '../src/data/sampleData';
 import { createNewBottle } from '../src/domain/bottleUtils';
-import { BottleRecord, BackupData } from '../src/types/sake';
+import { validateBackupData } from '../src/domain/validation';
+import { BottleRecord, BackupData, PhotoRecord } from '../src/types/sake';
 
 describe('storage (IndexedDB 永続化レイヤー) テスト', () => {
   beforeEach(async () => {
@@ -228,10 +231,10 @@ describe('storage (IndexedDB 永続化レイヤー) テスト', () => {
   });
 
   describe('バックアップの書き出しと読み込み (往復の整合性)', () => {
-    it('バックアップ書き出しにより論理削除済みも含む全データが出力されること', async () => {
+    it('バックアップ書き出しにより論理削除済みも含むデータが出力され、削除ボトルの写真参照が正規化されること', async () => {
       await loadSampleData();
 
-      // 1件論理削除してみる
+      // 1件論理削除（SAMPLE_BOTTLES[0] には写真が2枚紐づいている）
       const targetBottle = SAMPLE_BOTTLES[0]!;
       await deleteBottle(targetBottle.id);
 
@@ -239,14 +242,86 @@ describe('storage (IndexedDB 永続化レイヤー) テスト', () => {
       expect(backup.schemaVersion).toBe(1);
       expect(backup.exportedAt).toBeDefined();
       expect(backup.bottles).toHaveLength(SAMPLE_BOTTLES.length);
-      expect(backup.photos).toHaveLength(SAMPLE_PHOTOS.length);
+      // 削除されたボトルの写真は物理削除されるため、残りの有効な写真のみが出力される
+      expect(backup.photos).toHaveLength(SAMPLE_PHOTOS.length - 2);
 
-      // 論理削除されたボトルも含まれていること
+      // 論理削除されたボトルも含まれており、photoIds: [] と primaryPhotoId: null に正規化されていること
       const deletedInBackup = backup.bottles.find((b) => b.id === targetBottle.id);
       expect(deletedInBackup?.deleted).toBe(true);
+      expect(deletedInBackup?.photoIds).toEqual([]);
+      expect(deletedInBackup?.primaryPhotoId).toBeNull();
+
+      // 直後のバックアップ検証が厳格に成功すること
+      const valRes = validateBackupData(backup);
+      expect(valRes.success).toBe(true);
 
       const lastBackupAt = await getMeta('lastBackupAt');
       expect(lastBackupAt).toBe(backup.exportedAt);
+    });
+
+    it('同期前（削除直後）のストレージ検証: 未同期写真は物理削除のみ、同期済み写真は pendingDeletedPhotos に退避されること', async () => {
+      // 1. 未同期写真を持つボトル
+      const unsyncedPhotoId = '22222222-0001-4000-8000-000000000001';
+      const bottle1 = createNewBottle({ name: '未同期写真酒', category: '日本酒', photoIds: [unsyncedPhotoId] });
+      const photo1: PhotoRecord = {
+        id: unsyncedPhotoId,
+        bottleId: bottle1.id,
+        mimeType: 'image/jpeg',
+        dataUrl: SAMPLE_PHOTOS[0]!.dataUrl,
+        width: 400,
+        height: 500,
+        byteSize: 144,
+        contentHash: 'hash-unsynced-1',
+        driveFileId: null, // 未同期
+        createdAt: '2026-11-10T10:00:00.000Z',
+        updatedAt: '2026-11-10T10:00:00.000Z',
+        deleted: false,
+      };
+      await saveBottleWithPhotos(bottle1, [photo1]);
+
+      // 2. 同期済み写真を持つボトル
+      const syncedPhotoId = '22222222-0002-4000-8000-000000000002';
+      const bottle2 = createNewBottle({ name: '同期済み写真酒', category: '日本酒', photoIds: [syncedPhotoId] });
+      const photo2: PhotoRecord = {
+        id: syncedPhotoId,
+        bottleId: bottle2.id,
+        mimeType: 'image/jpeg',
+        dataUrl: SAMPLE_PHOTOS[1]!.dataUrl,
+        width: 400,
+        height: 500,
+        byteSize: 144,
+        contentHash: 'hash-synced-2',
+        driveFileId: 'drive-file-id-abc', // 同期済み
+        createdAt: '2026-11-10T10:00:00.000Z',
+        updatedAt: '2026-11-10T10:00:00.000Z',
+        deleted: false,
+      };
+      await saveBottleWithPhotos(bottle2, [photo2]);
+
+      // bottle1 (未同期) を削除
+      await deleteBottle(bottle1.id);
+      expect((await getBottle(bottle1.id))?.deleted).toBe(true);
+      expect((await getBottle(bottle1.id))?.photoIds).toEqual([]);
+      expect(await getPhoto(unsyncedPhotoId)).toBeUndefined();
+      // 未同期写真は pendingDeletedPhotos に残らない
+      const pendingAfterB1 = await getPendingDeletedPhotos();
+      expect(pendingAfterB1).toHaveLength(0);
+
+      // bottle2 (同期済み) を削除
+      await deleteBottle(bottle2.id);
+      expect((await getBottle(bottle2.id))?.deleted).toBe(true);
+      expect((await getBottle(bottle2.id))?.photoIds).toEqual([]);
+      expect(await getPhoto(syncedPhotoId)).toBeUndefined();
+      // 同期済み写真は pendingDeletedPhotos に記録される
+      const pendingAfterB2 = await getPendingDeletedPhotos();
+      expect(pendingAfterB2).toHaveLength(1);
+      expect(pendingAfterB2[0]?.id).toBe(syncedPhotoId);
+      expect(pendingAfterB2[0]?.deleted).toBe(true);
+
+      // 削除直後にバックアップを書き出して検証
+      const backup = await exportBackupData();
+      const valRes = validateBackupData(backup);
+      expect(valRes.success).toBe(true);
     });
 
     it('正常なバックアップデータを完全に復元できること（往復整合性）', async () => {

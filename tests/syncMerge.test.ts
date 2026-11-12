@@ -6,6 +6,7 @@ import {
   mergePhotoSyncMetas,
   reconcilePhotosWithBottles,
   hasSampleDataRecords,
+  sanitizeDeletedBottle,
 } from '../src/domain/syncMerge';
 import {
   closeDb,
@@ -127,6 +128,65 @@ describe('同期マージ純粋ドメインロジック (PR #11)', () => {
 
       expect(() => mergeBottleRecords(b1, b2)).toThrow('ID が一致しないボトルはマージできません');
     });
+
+    it('マージ結果が削除済み (deleted: true) の場合、photoIds: [] と primaryPhotoId: null に正規化され、updatedAt は維持されること', () => {
+      const id = '00000000-0000-4000-8000-000000000001';
+      const updatedTime = '2026-11-09T15:00:00.000Z';
+      const local = createTestBottle({
+        id,
+        deleted: true,
+        photoIds: ['photo-id-1', 'photo-id-2'],
+        primaryPhotoId: 'photo-id-1',
+        updatedAt: updatedTime,
+      });
+      const remote = createTestBottle({
+        id,
+        deleted: false,
+        updatedAt: '2026-11-09T10:00:00.000Z',
+      });
+
+      const merged = mergeBottleRecords(local, remote);
+      expect(merged.deleted).toBe(true);
+      expect(merged.updatedAt).toBe(updatedTime);
+      expect(merged.photoIds).toEqual([]);
+      expect(merged.primaryPhotoId).toBeNull();
+    });
+  });
+
+  describe('sanitizeDeletedBottle (削除済みボトルのトームストーン正規化)', () => {
+    it('deleted === false の有効なボトルは無加工でそのまま返ること', () => {
+      const bottle = createTestBottle({
+        deleted: false,
+        photoIds: ['photo-1'],
+        primaryPhotoId: 'photo-1',
+      });
+      const res = sanitizeDeletedBottle(bottle);
+      expect(res).toBe(bottle); // 同一オブジェクト参照
+    });
+
+    it('deleted === true で写真参照を持つボトルは photoIds: [] と primaryPhotoId: null に正規化されること', () => {
+      const bottle = createTestBottle({
+        deleted: true,
+        photoIds: ['photo-1', 'photo-2'],
+        primaryPhotoId: 'photo-1',
+        updatedAt: '2026-11-09T20:00:00.000Z',
+      });
+      const res = sanitizeDeletedBottle(bottle);
+      expect(res.deleted).toBe(true);
+      expect(res.photoIds).toEqual([]);
+      expect(res.primaryPhotoId).toBeNull();
+      expect(res.updatedAt).toBe('2026-11-09T20:00:00.000Z');
+    });
+
+    it('deleted === true で既に正規化済みのボトルはそのまま返ること', () => {
+      const bottle = createTestBottle({
+        deleted: true,
+        photoIds: [],
+        primaryPhotoId: null,
+      });
+      const res = sanitizeDeletedBottle(bottle);
+      expect(res).toBe(bottle);
+    });
   });
 
   describe('mergeBottleCollections (コレクションマージ・空端末保護・初回同期・冪等性)', () => {
@@ -144,6 +204,31 @@ describe('同期マージ純粋ドメインロジック (PR #11)', () => {
 
       expect(merged).toHaveLength(2);
       expect(merged.map((b) => b.id)).toEqual(['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002']);
+    });
+
+    it('空端末保護: リモートに写真参照が残る削除済みボトルが存在する場合、photoIds: [] に正規化して復元すること', () => {
+      const remoteBottles = [
+        createTestBottle({
+          id: '00000000-0000-4000-8000-000000000001',
+          name: '旧形式削除済み酒',
+          deleted: true,
+          photoIds: ['photo-remote-1'],
+          primaryPhotoId: 'photo-remote-1',
+          updatedAt: '2026-11-09T12:00:00.000Z',
+        }),
+      ];
+
+      const merged = mergeBottleCollections({
+        localBottles: [],
+        remoteBottles,
+        isInitialEmptyClient: true,
+      });
+
+      expect(merged).toHaveLength(1);
+      expect(merged[0]?.deleted).toBe(true);
+      expect(merged[0]?.photoIds).toEqual([]);
+      expect(merged[0]?.primaryPhotoId).toBeNull();
+      expect(merged[0]?.updatedAt).toBe('2026-11-09T12:00:00.000Z');
     });
 
     it('ローカルが0件の場合、isInitialEmptyClient の指定がなくてもリモートをそのまま採用すること', () => {
