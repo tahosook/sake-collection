@@ -326,6 +326,7 @@ Pages Functions（`/api/sync-config`）が Access JWT の完全検証を行い�
 
 ### 6.4 GAS コードの更新手順（clasp による再デプロイ）
 `gas/Code.gs` や `gas/appsscript.json` を変更した際は、clasp（Google Apps Script CLI）を使用してプロジェクトへの反映と版更新を行います。
+※ clasp push によりサーバー側マニフェストが上書きされるため、`gas/appsscript.json` に webapp 設定（`executeAs`: 自分 / `access`: 全員）が必須です。この設定が欠けると push 時に Web アプリの公開設定が剥がれて同期エンドポイントが 404 になるため、設定を変更・削除しないでください。
 
 #### 1. 初回セットアップ（端末ごと・初回のみ）
 1. Google アカウントで clasp にログインします（未ログイン時）:
