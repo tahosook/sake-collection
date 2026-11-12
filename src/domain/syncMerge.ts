@@ -2,6 +2,25 @@ import { BottleRecord, PhotoRecord, PhotoSyncMeta } from '../types/sake';
 import { SAMPLE_BOTTLES } from '../data/sampleData';
 
 /**
+ * 削除済みボトルのトームストーンを正規化する純粋関数
+ * deleted === true の場合、updatedAt を書き換えずに photoIds: [] と primaryPhotoId: null にする。
+ * deleted === false の場合はそのまま返す。
+ */
+export function sanitizeDeletedBottle(bottle: BottleRecord): BottleRecord {
+  if (bottle.deleted) {
+    if (bottle.photoIds.length === 0 && bottle.primaryPhotoId === null) {
+      return bottle;
+    }
+    return {
+      ...bottle,
+      photoIds: [],
+      primaryPhotoId: null,
+    };
+  }
+  return bottle;
+}
+
+/**
  * 2つの同一 ID を持つ BottleRecord を LWW (Last-Write-Wins: 最終更新日時優先) でマージする純粋関数
  *
  * ルール:
@@ -9,29 +28,27 @@ import { SAMPLE_BOTTLES } from '../data/sampleData';
  * 2. updatedAt が完全に一致する場合の決定的タイブレーク:
  *    - deleted === true を優先（一方が削除されていれば削除を採用）。
  *    - deleted も一致する場合はリモート（サーバー側）レコードを維持する。
+ * 3. マージ結果が deleted === true の場合、updatedAt は維持したまま photoIds: [], primaryPhotoId: null に正規化する。
  */
 export function mergeBottleRecords(local: BottleRecord, remote: BottleRecord): BottleRecord {
   if (local.id !== remote.id) {
     throw new Error(`ID が一致しないボトルはマージできません (local: ${local.id}, remote: ${remote.id})`);
   }
 
+  let winner: BottleRecord;
   if (local.updatedAt > remote.updatedAt) {
-    return local;
-  }
-  if (remote.updatedAt > local.updatedAt) {
-    return remote;
-  }
-
-  // 同一日時のタイブレーク: deleted === true を優先
-  if (local.deleted && !remote.deleted) {
-    return local;
-  }
-  if (remote.deleted && !local.deleted) {
-    return remote;
+    winner = local;
+  } else if (remote.updatedAt > local.updatedAt) {
+    winner = remote;
+  } else if (local.deleted && !remote.deleted) {
+    winner = local;
+  } else if (remote.deleted && !local.deleted) {
+    winner = remote;
+  } else {
+    winner = remote;
   }
 
-  // 削除状態も同じならリモートを維持
-  return remote;
+  return sanitizeDeletedBottle(winner);
 }
 
 export interface MergeBottleCollectionsOptions {
@@ -48,14 +65,15 @@ export interface MergeBottleCollectionsOptions {
  * - isInitialEmptyClient === true（ローカルが0件）の場合、リモートの既存データを消さずそのまま採用する。
  * - 両方に存在するボトルは LWW でマージ。
  * - 片方にしか存在しないボトルはそのまま維持。
+ * - deleted === true のボトルはいずれも photoIds: [], primaryPhotoId: null に正規化。
  * - 結果は id 昇順で安定ソートして返す。
  */
 export function mergeBottleCollections(options: MergeBottleCollectionsOptions): BottleRecord[] {
   const { localBottles, remoteBottles, isInitialEmptyClient = false } = options;
 
   if (isInitialEmptyClient || localBottles.length === 0) {
-    // 空端末保護: リモートのデータをそのまま全件復元
-    return [...remoteBottles].sort((a, b) => a.id.localeCompare(b.id));
+    // 空端末保護: リモートのデータをそのまま全件復元（削除済みボトルは正規化）
+    return remoteBottles.map(sanitizeDeletedBottle).sort((a, b) => a.id.localeCompare(b.id));
   }
 
   const remoteMap = new Map<string, BottleRecord>(remoteBottles.map((b) => [b.id, b]));
@@ -66,13 +84,13 @@ export function mergeBottleCollections(options: MergeBottleCollectionsOptions): 
     if (remote) {
       mergedMap.set(local.id, mergeBottleRecords(local, remote));
     } else {
-      mergedMap.set(local.id, local);
+      mergedMap.set(local.id, sanitizeDeletedBottle(local));
     }
   }
 
   for (const remote of remoteBottles) {
     if (!mergedMap.has(remote.id)) {
-      mergedMap.set(remote.id, remote);
+      mergedMap.set(remote.id, sanitizeDeletedBottle(remote));
     }
   }
 

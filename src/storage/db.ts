@@ -188,27 +188,62 @@ export async function saveBottles(bottles: BottleRecord[]): Promise<void> {
 }
 
 /**
- * ボトルを論理削除する（deleted = true, updatedAt = now）
- * 紐づく写真レコードも同一トランザクションで論理削除する（設計 §3.3 準拠）
+ * ボトルを論理削除する（deleted = true, updatedAt = now, photoIds = [], primaryPhotoId = null）
+ * 紐づく写真は photos ストアから物理削除し、Drive 同期済み（driveFileId !== null）だった写真は
+ * 次回同期での Drive ゴミ箱移動のために meta ストアの 'pendingDeletedPhotos' に退避する。
+ * （saveBottleWithPhotos と方式を揃え、直後のバックアップ書き出しにおける参照整合性を保証する）
  */
 export async function deleteBottle(id: string, nowIso: string = new Date().toISOString()): Promise<void> {
   const db = await getDb();
-  const tx = db.transaction(['bottles', 'photos'], 'readwrite');
+  const tx = db.transaction(['bottles', 'photos', 'meta'], 'readwrite');
   const bottleStore = tx.objectStore('bottles');
   const photoStore = tx.objectStore('photos');
+  const metaStore = tx.objectStore('meta');
 
   const bottle = await bottleStore.get(id);
   if (bottle) {
     bottle.deleted = true;
     bottle.updatedAt = nowIso;
+    bottle.photoIds = [];
+    bottle.primaryPhotoId = null;
     await bottleStore.put(bottle);
 
-    // 紐づく写真もすべて論理削除
+    // 紐づく写真を取得し、同期済み写真の退避と photos ストアからの物理削除を行う
     const relatedPhotos = await photoStore.index('by_bottleId').getAll(id);
-    for (const p of relatedPhotos) {
-      p.deleted = true;
-      p.updatedAt = nowIso;
-      await photoStore.put(p);
+    if (relatedPhotos.length > 0) {
+      const removedSyncedMetas: PhotoSyncMeta[] = [];
+
+      for (const p of relatedPhotos) {
+        if (p.driveFileId !== null) {
+          const meta = toPhotoSyncMeta(p);
+          removedSyncedMetas.push({
+            ...meta,
+            deleted: true,
+            updatedAt: nowIso,
+          });
+        }
+        // ローカル photos ストアからは即座に物理削除
+        await photoStore.delete(p.id);
+      }
+
+      // Drive 同期済みだった写真があれば pendingDeletedPhotos に追記
+      if (removedSyncedMetas.length > 0) {
+        const existingMetaRecord = await metaStore.get('pendingDeletedPhotos');
+        const currentPending = Array.isArray(existingMetaRecord?.value)
+          ? (existingMetaRecord.value as PhotoSyncMeta[])
+          : [];
+
+        const pendingMap = new Map<string, PhotoSyncMeta>(currentPending.map((m) => [m.id, m]));
+        for (const m of removedSyncedMetas) {
+          pendingMap.set(m.id, m);
+        }
+
+        await metaStore.put({
+          key: 'pendingDeletedPhotos',
+          value: Array.from(pendingMap.values()),
+          updatedAt: nowIso,
+        });
+      }
     }
   }
 
@@ -514,9 +549,35 @@ export async function commitSyncResultToDb(input: CommitSyncResultInput): Promis
   const photoStore = tx.objectStore('photos');
   const metaStore = tx.objectStore('meta');
 
+  const purgeSet = new Set(photosToPurge);
+
   // 1. ボトル全件 put
+  // deleted === true のボトルは photoIds: [] と primaryPhotoId: null に正規化して保存
+  // 有効なボトルでも万一 photosToPurge に含まれる写真 ID があれば除外
   for (const b of bottles) {
-    await bottleStore.put(b);
+    if (b.deleted) {
+      await bottleStore.put({
+        ...b,
+        photoIds: [],
+        primaryPhotoId: null,
+      });
+    } else {
+      const hasPurgedPhotos = b.photoIds.some((pid) => purgeSet.has(pid));
+      if (hasPurgedPhotos) {
+        const cleanedPhotoIds = b.photoIds.filter((pid) => !purgeSet.has(pid));
+        const cleanedPrimary =
+          b.primaryPhotoId && cleanedPhotoIds.includes(b.primaryPhotoId)
+            ? b.primaryPhotoId
+            : cleanedPhotoIds[0] ?? null;
+        await bottleStore.put({
+          ...b,
+          photoIds: cleanedPhotoIds,
+          primaryPhotoId: cleanedPrimary,
+        });
+      } else {
+        await bottleStore.put(b);
+      }
+    }
   }
 
   // 2. 孤立・削除済み写真の物理削除
@@ -570,12 +631,43 @@ export async function clearPendingDeletedPhotos(nowIso: string = new Date().toIS
 
 /**
  * IndexedDB 内の全データをバックアップ形式（BackupData）で書き出す
- * 論理削除済みのボトル・写真も含めて出力
+ *
+ * 整合性保証:
+ * - deleted === true のボトルは photoIds: [] と primaryPhotoId: null に正規化して出力する。
+ * - 写真については、deleted === true のもの、および親ボトルが deleted === true（または存在しない）ものを除外し、
+ *   有効なボトルに紐づく有効な写真のみを出力する（既存の未同期・旧形式トームストーンの救済）。
+ * - 有効なボトル（deleted === false）および有効な写真は一切無加工で出力する。
  */
 export async function exportBackupData(nowIso: string = new Date().toISOString()): Promise<BackupData> {
   const db = await getDb();
-  const bottles = await db.getAll('bottles');
-  const photos = await db.getAll('photos');
+  const rawBottles = await db.getAll('bottles');
+  const rawPhotos = await db.getAll('photos');
+
+  const bottleMap = new Map<string, BottleRecord>(rawBottles.map((b) => [b.id, b]));
+
+  // 1. ボトルの正規化: deleted === true のボトルのみ photoIds: [], primaryPhotoId: null に正規化
+  const bottles = rawBottles.map((b) => {
+    if (b.deleted) {
+      return {
+        ...b,
+        photoIds: [],
+        primaryPhotoId: null,
+      };
+    }
+    return b;
+  });
+
+  // 2. 写真の正規化: p.deleted === true または親ボトルが deleted === true の残留写真を除外
+  const photos = rawPhotos.filter((p) => {
+    if (p.deleted) {
+      return false;
+    }
+    const parent = bottleMap.get(p.bottleId);
+    if (!parent || parent.deleted) {
+      return false;
+    }
+    return true;
+  });
 
   const backup: BackupData = {
     schemaVersion: 1,

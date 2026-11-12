@@ -630,14 +630,25 @@ function handleSyncMetadata(request, ssContext, _driveContext) {
 
   reconciledPhotoMetas.sort(function (a, b) { return a.id.localeCompare(b.id); });
 
-  // G. シート一括書き込み
-  writeServerBottles(ssContext.bottlesSheet, mergedBottles);
+  // G. 削除済みボトルのトームストーン正規化 (updatedAt は維持したまま photoIds: [], primaryPhotoId: null)
+  var sanitizedBottles = mergedBottles.map(function (b) {
+    if (b.deleted) {
+      return Object.assign({}, b, {
+        photoIds: [],
+        primaryPhotoId: null,
+      });
+    }
+    return b;
+  });
+
+  // H. シート一括書き込み
+  writeServerBottles(ssContext.bottlesSheet, sanitizedBottles);
   writeServerPhotoMetas(ssContext.photosSheet, reconciledPhotoMetas);
   updateLastSyncedAt(ssContext.syncMetaSheet, nowIso);
 
   return makeJsonResponse({
     ok: true,
-    bottles: mergedBottles,
+    bottles: sanitizedBottles,
     photoMetas: reconciledPhotoMetas,
     photosToUpload: photosToUpload,
     syncedAt: nowIso,
