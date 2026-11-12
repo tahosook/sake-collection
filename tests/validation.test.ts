@@ -268,21 +268,52 @@ describe('validation ドメインロジックテスト', () => {
       const b1 = { ...SAMPLE_BOTTLES[0], sources: 'not-an-array' };
       expect(validateBottleRecord(b1).success).toBe(false);
 
-      const b2 = {
+      // 不正なスキーム (ftp, httpx)
+      const bFtp = {
         ...SAMPLE_BOTTLES[0],
         sources: [{ title: 'テスト', url: 'ftp://invalid-url.com' }],
       };
-      const res2 = validateBottleRecord(b2);
-      expect(res2.success).toBe(false);
-      if (!res2.success) {
-        expect(res2.error).toContain('出典URL');
+      const resFtp = validateBottleRecord(bFtp);
+      expect(resFtp.success).toBe(false);
+      if (!resFtp.success) {
+        expect(resFtp.error).toContain('出典URL');
       }
 
+      const bHttpx = {
+        ...SAMPLE_BOTTLES[0],
+        sources: [{ title: 'テスト', url: 'httpx://invalid' }],
+      };
+      expect(validateBottleRecord(bHttpx).success).toBe(false);
+
+      // 単体文字列やホストなし URL
+      const bHttpOnly = {
+        ...SAMPLE_BOTTLES[0],
+        sources: [{ title: 'テスト', url: 'http' }],
+      };
+      expect(validateBottleRecord(bHttpOnly).success).toBe(false);
+
+      const bNoHost = {
+        ...SAMPLE_BOTTLES[0],
+        sources: [{ title: 'テスト', url: 'http://' }],
+      };
+      expect(validateBottleRecord(bNoHost).success).toBe(false);
+
+      // title が不正型
       const b3 = {
         ...SAMPLE_BOTTLES[0],
         sources: [{ title: 123, url: 'https://example.com' }],
       };
       expect(validateBottleRecord(b3).success).toBe(false);
+
+      // 正常な http および https URL は通過すること
+      const bValid = {
+        ...SAMPLE_BOTTLES[0],
+        sources: [
+          { title: 'HTTP', url: 'http://example.com' },
+          { title: 'HTTPS', url: 'https://example.com/item/1' },
+        ],
+      };
+      expect(validateBottleRecord(bValid).success).toBe(true);
     });
   });
 

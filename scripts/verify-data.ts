@@ -268,7 +268,7 @@ function verifyNoForbiddenComments(): void {
       const fullPath = path.join(dirPath, entry.name);
       if (entry.isDirectory()) {
         scanDir(fullPath);
-      } else if (entry.isFile() && /\.(ts|tsx|js|jsx)$/.test(entry.name)) {
+      } else if (entry.isFile() && /\.(ts|tsx|js|jsx|gs)$/.test(entry.name)) {
         checkFile(fullPath);
       }
     }

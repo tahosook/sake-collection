@@ -229,8 +229,17 @@ export function validateBottleRecord(raw: unknown, indexHint?: number | string):
       return { success: false, error: `${prefix}sources[${i}] はオブジェクトである必要があります。` };
     }
     const s = src as Record<string, unknown>;
-    if (typeof s['url'] !== 'string' || !s['url'].startsWith('http')) {
-      return { success: false, error: `${prefix}出典URL (sources[${i}].url) は http から始まる有効なURL文字列である必要があります: ${String(s['url'])}` };
+    let isValidUrl = false;
+    if (typeof s['url'] === 'string') {
+      try {
+        const parsedUrl = new URL(s['url']);
+        isValidUrl = (parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:') && parsedUrl.hostname.length > 0;
+      } catch {
+        isValidUrl = false;
+      }
+    }
+    if (!isValidUrl) {
+      return { success: false, error: `${prefix}出典URL (sources[${i}].url) は http または https の有効なURL文字列である必要があります: ${String(s['url'])}` };
     }
     if (s['title'] !== undefined && typeof s['title'] !== 'string') {
       return { success: false, error: `${prefix}出典タイトル (sources[${i}].title) は文字列である必要があります。` };
