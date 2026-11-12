@@ -13,7 +13,7 @@
 - 画像処理：Canvas API。リサイズ（長辺最大 1600px 目安）・JPEG/WebP 圧縮・EXIF 完全除去
 - テスト・品質検証：Vitest + ESLint + TypeScript (tsc --noEmit)
 - 同期バックエンド：Google Apps Script (GAS Web App) + Google Sheets + Google Drive
-- ホスティング・認証：Cloudflare Pages + Cloudflare Access（本番・プレビュー両方。本人の Google アカウントのみ許可）
+- ホスティング・認証：Cloudflare Pages + Cloudflare Access（本番・プレビュー両方。認証はメール宛ワンタイムログインコード方式、本人のメールアドレスのみ許可）
 
 ## 2. データモデル（ステップ1〜4共通・確定版）
 

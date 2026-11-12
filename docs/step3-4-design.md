@@ -23,7 +23,7 @@
    - FilterOptions に `wantToBuyAgainOnly?: boolean`（既定値 `false`）を追加する。
    - filterBottles 内で、`wantToBuyAgainOnly === true` のときは `bottle.wantToBuyAgain === true` のボトルのみを通過させる（種類フィルタ・状態フィルタ・キーワード検索と AND 条件で組み合わせ可能とする）。
 2. **画面 UI（src/components/SearchBar.tsx / src/App.tsx）**：
-   - 「飲んだ記録」画面（`activeTab === 'finished'` かつ `historySubTab === 'finished'`）のフィルタ領域に、タップ領域 44px 以上のトグルチップ **「♥ また買いたいのみ」** を配置する。
+   - 「飲んだ記録」画面（`activeTab === 'finished'` かつ `historySubTab === 'finished'`）の検索バーの下に、タップ領域 44px 以上のトグルチップ「また買いたいのみ」（SVG ハート付き）を配置する。
    - ON のときは `filteredFinishedBottles` に `wantToBuyAgainOnly: true` を適用し、該当が0件の場合は空メッセージを「『また買いたい』印のある飲んだ記録はありません」とする。
    - 「手放した酒」（`historySubTab === 'disposed'`）や「家にある酒」（`activeTab === 'inventory'`）の表示には干渉させない。
 3. **詳細画面の状態変更パネルでの日付空欄許容（src/components/BottleDetailModal.tsx）**：
