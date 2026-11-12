@@ -10,6 +10,7 @@ local-data/
 *.jpg
 *.jpeg
 *.png
+!public/icons/*.png
 *.webp
 *.heic
 

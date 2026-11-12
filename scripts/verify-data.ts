@@ -303,6 +303,22 @@ function verifyNoRealPhotosOrData(): void {
     '.bmp', '.gif', '.svg', '.avif', '.ico', '.tiff',
   ];
 
+  // 許可された静的画像アセット（PWA アイコンホワイトリスト方式）
+  // 実写真の混入を防ぐため、固定パスかつ 32KB 以下の軽量アセットのみ許可
+  const allowedImagePaths = new Set([
+    'public/icons/icon.svg',
+    'public/icons/icon-192.png',
+    'public/icons/icon-512.png',
+    'public/icons/icon-maskable-512.png',
+    'public/icons/apple-touch-icon.png',
+    'dist/icons/icon.svg',
+    'dist/icons/icon-192.png',
+    'dist/icons/icon-512.png',
+    'dist/icons/icon-maskable-512.png',
+    'dist/icons/apple-touch-icon.png',
+  ]);
+  const MAX_ICON_BYTE_SIZE = 32 * 1024; // 32KB
+
   // リポジトリ内で許可された JSON ファイルの相対パス一覧（ホワイトリスト方式）
   const allowedJsonFiles = new Set([
     'package.json',
@@ -317,6 +333,7 @@ function verifyNoRealPhotosOrData(): void {
   const ignoredDirs = new Set(['.git', 'node_modules', '.gemini']);
 
   const foundPhotoFiles: string[] = [];
+  const foundOversizedIcons: string[] = [];
   const foundDisallowedJsonFiles: string[] = [];
 
   function scan(currentDir: string): void {
@@ -331,9 +348,17 @@ function verifyNoRealPhotosOrData(): void {
         }
       } else if (entry.isFile()) {
         const ext = path.extname(entry.name).toLowerCase();
-        // 画像ファイルの検出
+        // 画像ファイルの検出とホワイトリスト判定
         if (photoExtensions.includes(ext)) {
-          foundPhotoFiles.push(relativePath);
+          const normalizedPath = relativePath.replace(/\\/g, '/');
+          if (allowedImagePaths.has(normalizedPath)) {
+            const stats = fs.statSync(fullPath);
+            if (stats.size > MAX_ICON_BYTE_SIZE) {
+              foundOversizedIcons.push(`${relativePath} (${stats.size} bytes > 上限 ${MAX_ICON_BYTE_SIZE} bytes)`);
+            }
+          } else {
+            foundPhotoFiles.push(relativePath);
+          }
         }
         // JSON ファイルのホワイトリスト検査
         if (ext === '.json') {
@@ -348,9 +373,15 @@ function verifyNoRealPhotosOrData(): void {
   scan(projectRoot);
 
   if (foundPhotoFiles.length > 0) {
-    console.error('画像ファイルが検出されました（リポジトリ内への画像ファイル配置は禁止です）:');
+    console.error('許可外の画像ファイルが検出されました（リポジトリ内への画像ファイル配置は禁止です）:');
     foundPhotoFiles.forEach((file) => console.error(`  - ${file}`));
-    throw new Error('[verify:data] 画像ファイルがリポジトリ内に存在します');
+    throw new Error('[verify:data] 許可外の画像ファイルがリポジトリ内に存在します');
+  }
+
+  if (foundOversizedIcons.length > 0) {
+    console.error('上限サイズ(32KB)を超えるアイコンファイルが検出されました（実写真偽装防止）:');
+    foundOversizedIcons.forEach((file) => console.error(`  - ${file}`));
+    throw new Error('[verify:data] アイコンファイルのサイズが上限を超えています');
   }
 
   if (foundDisallowedJsonFiles.length > 0) {

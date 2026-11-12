@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="112" fill="#1c1917" />
+  <!-- Bottle outline & body -->
+  <!-- Cap / Spout -->
+  <rect x="200" y="80" width="48" height="32" rx="8" fill="#d97706" />
+  <rect x="208" y="112" width="32" height="40" fill="#d97706" />
+  <!-- Bottle Neck & Shoulders -->
+  <path d="M 208 152 C 208 190 160 216 160 264 L 160 416 C 160 424 168 432 176 432 L 272 432 C 280 432 288 424 288 416 L 288 264 C 288 216 240 190 240 152 Z" fill="#fbbf24" />
+  <!-- Bottle Label -->
+  <rect x="176" y="272" width="96" height="120" rx="6" fill="#fef3c7" />
+  <rect x="188" y="288" width="72" height="8" rx="4" fill="#b45309" />
+  <rect x="196" y="306" width="56" height="6" rx="3" fill="#d97706" />
+  <rect x="204" y="322" width="40" height="6" rx="3" fill="#d97706" />
+  <!-- Sake Cup (Choko) -->
+  <path d="M 312 336 L 384 336 C 384 384 368 416 348 416 C 328 416 312 384 312 336 Z" fill="#f59e0b" />
+  <!-- Cup Rim & Interior -->
+  <ellipse cx="348" cy="336" rx="36" ry="12" fill="#fef3c7" />
+  <!-- Snake Eye (Janome) Pattern inside cup -->
+  <ellipse cx="348" cy="336" rx="24" ry="8" fill="#1e3a8a" />
+  <ellipse cx="348" cy="336" rx="16" ry="5.3" fill="#fef3c7" />
+  <ellipse cx="348" cy="336" rx="8" ry="2.7" fill="#1e3a8a" />
+</svg>
