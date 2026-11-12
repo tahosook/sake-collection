@@ -383,7 +383,7 @@ npx clasp push
 2. **POST リクエストでの合言葉認証確認（fail-closed 認証）**:
    不正な合言葉を含む POST リクエストを送り、未認証アクセスが確実に遮断されることを確認します:
    ```bash
-   curl -L -X POST "<GAS_WEB_APP_URL>" \
+   curl -L "<GAS_WEB_APP_URL>" \
      -H "Content-Type: application/json" \
      -d '{"action":"ping","passphrase":"invalid-passphrase"}'
    ```
