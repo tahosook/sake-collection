@@ -204,6 +204,48 @@ export function validateBottleRecord(raw: unknown, indexHint?: number | string):
     return { success: false, error: `${prefix}userEditedFields は配列である必要があります。` };
   }
 
+  // 解説・出典 (description, sources)
+  if (b['description'] !== null) {
+    if (typeof b['description'] !== 'object' || b['description'] === null || Array.isArray(b['description'])) {
+      return { success: false, error: `${prefix}解説 (description) はオブジェクトまたは null である必要があります。` };
+    }
+    const desc = b['description'] as Record<string, unknown>;
+    if (
+      typeof desc['summary'] !== 'string' ||
+      typeof desc['tasteProfile'] !== 'string' ||
+      typeof desc['background'] !== 'string' ||
+      typeof desc['servingSuggestion'] !== 'string'
+    ) {
+      return { success: false, error: `${prefix}解説 (description) の 4部構成フィールド (summary, tasteProfile, background, servingSuggestion) は文字列である必要があります。` };
+    }
+  }
+
+  if (!Array.isArray(b['sources'])) {
+    return { success: false, error: `${prefix}sources は配列である必要があります。` };
+  }
+  for (let i = 0; i < (b['sources'] as unknown[]).length; i++) {
+    const src = (b['sources'] as unknown[])[i];
+    if (typeof src !== 'object' || src === null || Array.isArray(src)) {
+      return { success: false, error: `${prefix}sources[${i}] はオブジェクトである必要があります。` };
+    }
+    const s = src as Record<string, unknown>;
+    let isValidUrl = false;
+    if (typeof s['url'] === 'string') {
+      try {
+        const parsedUrl = new URL(s['url']);
+        isValidUrl = (parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'https:') && parsedUrl.hostname.length > 0;
+      } catch {
+        isValidUrl = false;
+      }
+    }
+    if (!isValidUrl) {
+      return { success: false, error: `${prefix}出典URL (sources[${i}].url) は http または https の有効なURL文字列である必要があります: ${String(s['url'])}` };
+    }
+    if (s['title'] !== undefined && typeof s['title'] !== 'string') {
+      return { success: false, error: `${prefix}出典タイトル (sources[${i}].title) は文字列である必要があります。` };
+    }
+  }
+
   return { success: true, data: raw as BottleRecord };
 }
 
@@ -233,6 +275,18 @@ export function validatePhotoRecord(raw: unknown, indexHint?: number | string): 
   }
   if (typeof p['contentHash'] !== 'string' || !HASH_HEX_REGEX.test(p['contentHash'])) {
     return { success: false, error: `${prefix}写真の contentHash は64桁の16進数文字列 (SHA-256) である必要があります。` };
+  }
+  if (typeof p['width'] !== 'number' || !Number.isInteger(p['width']) || (p['width'] as number) <= 0) {
+    return { success: false, error: `${prefix}写真の width は正の整数である必要があります: ${String(p['width'])}` };
+  }
+  if (typeof p['height'] !== 'number' || !Number.isInteger(p['height']) || (p['height'] as number) <= 0) {
+    return { success: false, error: `${prefix}写真の height は正の整数である必要があります: ${String(p['height'])}` };
+  }
+  if (typeof p['byteSize'] !== 'number' || !Number.isInteger(p['byteSize']) || (p['byteSize'] as number) <= 0) {
+    return { success: false, error: `${prefix}写真の byteSize は正の整数である必要があります: ${String(p['byteSize'])}` };
+  }
+  if (p['driveFileId'] !== null && (typeof p['driveFileId'] !== 'string' || (p['driveFileId'] as string).trim() === '')) {
+    return { success: false, error: `${prefix}写真の driveFileId は非空の文字列または null である必要があります: ${String(p['driveFileId'])}` };
   }
   if (typeof p['createdAt'] !== 'string' || !ISO_DATE_REGEX.test(p['createdAt'])) {
     return { success: false, error: `${prefix}写真の createdAt が有効な ISO 8601 UTC 日時ではありません。` };

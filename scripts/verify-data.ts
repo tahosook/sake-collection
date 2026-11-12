@@ -227,7 +227,7 @@ function verifySampleData(): void {
  */
 function verifyNoForbiddenComments(): void {
   console.log('--- 2. 禁止コメント検査 ---');
-  const targetDirs = ['src', 'scripts', 'tests'];
+  const targetDirs = ['src', 'scripts', 'tests', 'functions', 'gas'];
   const targetFiles = [
     'eslint.config.js',
     'vite.config.ts',
@@ -268,7 +268,7 @@ function verifyNoForbiddenComments(): void {
       const fullPath = path.join(dirPath, entry.name);
       if (entry.isDirectory()) {
         scanDir(fullPath);
-      } else if (entry.isFile() && /\.(ts|tsx|js|jsx)$/.test(entry.name)) {
+      } else if (entry.isFile() && /\.(ts|tsx|js|jsx|gs)$/.test(entry.name)) {
         checkFile(fullPath);
       }
     }
@@ -370,7 +370,7 @@ function verifyNoRealPhotosOrData(): void {
 function verifyNoDirectLlmApi(): void {
   console.log('--- 4. 外部 LLM API 直呼び出し禁止検査 ---');
   const projectRoot = process.cwd();
-  const srcDir = path.resolve(projectRoot, 'src');
+  const targetDirs = ['src', 'functions', 'gas'].map((d) => path.resolve(projectRoot, d));
 
   // 禁止する外部 LLM API エンドポイントおよび SDK パッケージ名
   const forbiddenPatterns = [
@@ -392,7 +392,7 @@ function verifyNoDirectLlmApi(): void {
 
   const foundErrors: string[] = [];
 
-  // A. src/ 配下のファイル全体に対する正規表現検査
+  // A. src/, functions/, gas/ 配下のファイル全体に対する正規表現検査
   function scan(currentDir: string): void {
     if (!fs.existsSync(currentDir)) return;
     const entries = fs.readdirSync(currentDir, { withFileTypes: true });
@@ -400,7 +400,7 @@ function verifyNoDirectLlmApi(): void {
       const fullPath = path.join(currentDir, entry.name);
       if (entry.isDirectory()) {
         scan(fullPath);
-      } else if (entry.isFile() && /\.(ts|tsx|js|jsx)$/.test(entry.name)) {
+      } else if (entry.isFile() && /\.(ts|tsx|js|jsx|gs)$/.test(entry.name)) {
         const content = fs.readFileSync(fullPath, 'utf8');
         for (const pattern of forbiddenPatterns) {
           if (pattern.regex.test(content)) {
@@ -415,7 +415,9 @@ function verifyNoDirectLlmApi(): void {
     }
   }
 
-  scan(srcDir);
+  for (const dir of targetDirs) {
+    scan(dir);
+  }
 
   // B. package.json の依存関係検査
   const packageJsonPath = path.resolve(projectRoot, 'package.json');

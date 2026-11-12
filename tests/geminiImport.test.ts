@@ -43,6 +43,26 @@ describe('Gemini 相談・取り込み・ドメインロジックテスト (PR #
       expect(prompt).toContain('容量（volumeMl）が異なる商品の相場は絶対に混ぜない');
       expect(prompt).toContain('お酒の種類ヒント: 「日本酒」');
       expect(prompt).toContain('2026-11-09');
+
+      // B-4: カテゴリ別の説明軸がプロンプトに含まれること
+      const sakeAxes = CATEGORY_DESCRIPTION_AXES['日本酒'];
+      expect(prompt).toContain('【日本酒の解説（description）の記述軸】');
+      expect(prompt).toContain(sakeAxes.tasteAxis);
+      expect(prompt).toContain(sakeAxes.backgroundAxis);
+      expect(prompt).toContain(sakeAxes.servingAxis);
+    });
+
+    it('別カテゴリのヒントを指定した場合はそのカテゴリの説明軸が含まれること', () => {
+      const whiskyPrompt = buildGeminiConsultationPrompt({ categoryHint: 'ウイスキー' });
+      const whiskyAxes = CATEGORY_DESCRIPTION_AXES['ウイスキー'];
+      expect(whiskyPrompt).toContain('【ウイスキーの解説（description）の記述軸】');
+      expect(whiskyPrompt).toContain(whiskyAxes.tasteAxis);
+      expect(whiskyPrompt).toContain(whiskyAxes.backgroundAxis);
+      expect(whiskyPrompt).toContain(whiskyAxes.servingAxis);
+
+      const noHintPrompt = buildGeminiConsultationPrompt();
+      expect(noHintPrompt).not.toContain('記述軸');
+      expect(noHintPrompt).not.toContain('お酒の種類ヒント');
     });
   });
 
