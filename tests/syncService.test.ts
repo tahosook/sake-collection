@@ -5,6 +5,9 @@ import {
   testSyncConnection,
   executeFullSync,
   SyncProgress,
+  OFFLINE_SYNC_ERROR_MESSAGE,
+  OFFLINE_CONFIG_ERROR_MESSAGE,
+  OFFLINE_PING_ERROR_MESSAGE,
 } from '../src/services/syncService';
 import {
   closeDb,
@@ -897,6 +900,47 @@ describe('同期クライアントサービス統合テスト (PR #13)', () => {
       expect(valRes.success).toBe(true);
       expect(backup.bottles).toHaveLength(2);
       expect(backup.photos).toHaveLength(1);
+    });
+  });
+
+  describe('オフライン／通信エラー時の日本語エラーメッセージ (PWA PR 2)', () => {
+    it('fetchAutoSyncConfig: 通信失敗時 (TypeError) はオフライン用日本語メッセージを返すこと', async () => {
+      globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+
+      const res = await fetchAutoSyncConfig();
+      expect(res.success).toBe(false);
+      expect(res.error).toBe(OFFLINE_CONFIG_ERROR_MESSAGE);
+    });
+
+    it('testSyncConnection: 通信失敗時 (TypeError) はオフライン用日本語メッセージを返すこと', async () => {
+      globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('Load failed'));
+
+      const res = await testSyncConnection(dummyConfig);
+      expect(res.success).toBe(false);
+      expect(res.error).toBe(OFFLINE_PING_ERROR_MESSAGE);
+    });
+
+    it('executeFullSync: 設定保存済みの状態で通信失敗時、オフライン用日本語エラーを返すこと', async () => {
+      await saveSyncConfig(dummyConfig);
+      globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+
+      const progressEvents: SyncProgress[] = [];
+      await expect(
+        executeFullSync({
+          config: dummyConfig,
+          onProgress: (p) => progressEvents.push(p),
+        })
+      ).rejects.toThrow(OFFLINE_SYNC_ERROR_MESSAGE);
+
+      expect(progressEvents.some((p) => p.step === 'error' && p.message === OFFLINE_SYNC_ERROR_MESSAGE)).toBe(
+        true
+      );
+    });
+
+    it('executeFullSync: 設定未取得の端末がオフラインのとき「未設定です」ではなくオフライン用日本語エラーを返すこと', async () => {
+      globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+
+      await expect(executeFullSync()).rejects.toThrow(OFFLINE_SYNC_ERROR_MESSAGE);
     });
   });
 });

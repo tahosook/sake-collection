@@ -87,6 +87,26 @@ export interface SyncResult {
   error?: string;
 }
 
+export const OFFLINE_SYNC_ERROR_MESSAGE =
+  'オフラインまたは通信エラーのため同期できません。通信環境の良い場所で再度お試しください。（手元のデータは端末内に保存されています）';
+export const OFFLINE_CONFIG_ERROR_MESSAGE =
+  'オフラインまたは通信エラーのため、サーバーから同期設定を取得できませんでした。通信環境を確認してください。';
+export const OFFLINE_PING_ERROR_MESSAGE =
+  'オフラインまたは通信エラーのため、サーバーに接続できませんでした。通信環境を確認してください。';
+
+/**
+ * オフライン状態または fetch のネットワーク通信エラーであるかを判定する
+ */
+export function isOfflineOrNetworkError(error?: unknown): boolean {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return true;
+  }
+  if (error instanceof TypeError) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Cloudflare Pages Functions (/api/sync-config) から同期設定を自動取得する
  */
@@ -94,7 +114,16 @@ export async function fetchAutoSyncConfig(): Promise<{
   success: boolean;
   config?: SyncConnectionConfig;
   error?: string;
+  isNetworkError?: boolean;
 }> {
+  if (isOfflineOrNetworkError()) {
+    return {
+      success: false,
+      error: OFFLINE_CONFIG_ERROR_MESSAGE,
+      isNetworkError: true,
+    };
+  }
+
   try {
     const res = await fetch('/api/sync-config', {
       method: 'GET',
@@ -136,6 +165,13 @@ export async function fetchAutoSyncConfig(): Promise<{
     await saveSyncConfig(config);
     return { success: true, config };
   } catch (err) {
+    if (isOfflineOrNetworkError(err)) {
+      return {
+        success: false,
+        error: OFFLINE_CONFIG_ERROR_MESSAGE,
+        isNetworkError: true,
+      };
+    }
     return {
       success: false,
       error: `同期設定の取得中にエラーが発生しました: ${err instanceof Error ? err.message : String(err)}`,
@@ -147,13 +183,25 @@ export async function fetchAutoSyncConfig(): Promise<{
  * GAS Web App との通信ヘルパー (CORS プリフライト回避のため text/plain で POST)
  */
 async function postToGas<TRequest, TResponse>(gasUrl: string, payload: TRequest): Promise<TResponse> {
-  const res = await fetch(gasUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'text/plain;charset=utf-8',
-    },
-    body: JSON.stringify(payload),
-  });
+  if (isOfflineOrNetworkError()) {
+    throw new Error(OFFLINE_SYNC_ERROR_MESSAGE);
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(gasUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8',
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    if (isOfflineOrNetworkError(err)) {
+      throw new Error(OFFLINE_SYNC_ERROR_MESSAGE);
+    }
+    throw err;
+  }
 
   if (!res.ok) {
     throw new Error(`GAS サーバーとの通信に失敗しました (HTTP ${res.status})`);
@@ -193,6 +241,15 @@ export async function testSyncConnection(config: SyncConnectionConfig): Promise<
 
     return { success: true, response: res };
   } catch (err) {
+    if (
+      isOfflineOrNetworkError(err) ||
+      (err instanceof Error && err.message === OFFLINE_SYNC_ERROR_MESSAGE)
+    ) {
+      return {
+        success: false,
+        error: OFFLINE_PING_ERROR_MESSAGE,
+      };
+    }
     return {
       success: false,
       error: `サーバーに接続できませんでした: ${err instanceof Error ? err.message : String(err)}`,
@@ -227,6 +284,9 @@ export async function executeFullSync(options: ExecuteFullSyncOptions = {}): Pro
     const autoRes = await fetchAutoSyncConfig();
     if (autoRes.success && autoRes.config) {
       config = autoRes.config;
+    } else if (autoRes.isNetworkError) {
+      notify('error', OFFLINE_SYNC_ERROR_MESSAGE);
+      throw new Error(OFFLINE_SYNC_ERROR_MESSAGE);
     }
   }
 
@@ -235,6 +295,18 @@ export async function executeFullSync(options: ExecuteFullSyncOptions = {}): Pro
     notify('error', errMsg);
     throw new Error(errMsg);
   }
+
+  const resolvedConfig = config;
+  const runGasStep = async <TRequest, TResponse>(payload: TRequest): Promise<TResponse> => {
+    try {
+      return await postToGas<TRequest, TResponse>(resolvedConfig.gasUrl, payload);
+    } catch (err) {
+      if (err instanceof Error && err.message === OFFLINE_SYNC_ERROR_MESSAGE) {
+        notify('error', OFFLINE_SYNC_ERROR_MESSAGE);
+      }
+      throw err;
+    }
+  };
 
   // 2. ガード検証 (サンプルデータガード・空端末判定)
   notify('checking_guards', 'ローカルデータの状態を確認中...');
@@ -266,10 +338,7 @@ export async function executeFullSync(options: ExecuteFullSyncOptions = {}): Pro
     pendingDeletedPhotos,
   };
 
-  const metaResponse = await postToGas<SyncMetadataRequest, SyncMetadataResponse>(
-    config.gasUrl,
-    metaRequest
-  );
+  const metaResponse = await runGasStep<SyncMetadataRequest, SyncMetadataResponse>(metaRequest);
 
   if (!metaResponse.ok) {
     const errMsg = metaResponse.error || 'メタデータの同期に失敗しました';
@@ -319,10 +388,7 @@ export async function executeFullSync(options: ExecuteFullSyncOptions = {}): Pro
         photo: photoRecord,
       };
 
-      const uploadRes = await postToGas<UploadPhotoRequest, UploadPhotoResponse>(
-        config.gasUrl,
-        uploadReq
-      );
+      const uploadRes = await runGasStep<UploadPhotoRequest, UploadPhotoResponse>(uploadReq);
 
       if (!uploadRes.ok || !uploadRes.driveFileId) {
         const errMsg = uploadRes.error || `写真 (${pid}) のアップロードに失敗しました`;
@@ -407,8 +473,7 @@ export async function executeFullSync(options: ExecuteFullSyncOptions = {}): Pro
         photoIds: chunkIds,
       };
 
-      const downloadRes = await postToGas<DownloadPhotosRequest, DownloadPhotosResponse>(
-        config.gasUrl,
+      const downloadRes = await runGasStep<DownloadPhotosRequest, DownloadPhotosResponse>(
         downloadReq
       );
 
