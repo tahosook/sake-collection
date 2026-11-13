@@ -74,7 +74,7 @@ function isCacheableStaticAssetResponse(pathname, status, redirected, responseTy
 
   const lowerPath = pathname.toLowerCase();
   if (lowerPath.endsWith('.js') || lowerPath.endsWith('.mjs')) {
-    return mime.includes('javascript');
+    return mime === 'application/javascript' || mime === 'text/javascript';
   }
   if (lowerPath.endsWith('.css')) {
     return mime === 'text/css';
@@ -89,7 +89,7 @@ function isCacheableStaticAssetResponse(pathname, status, redirected, responseTy
     return mime === 'application/manifest+json' || mime === 'application/json';
   }
 
-  return true;
+  return false;
 }
 
 async function handleNavigationRequest(request) {

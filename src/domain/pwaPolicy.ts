@@ -120,7 +120,7 @@ export function isCacheableStaticAssetResponse(
 
   const lowerPath = pathname.toLowerCase();
   if (lowerPath.endsWith('.js') || lowerPath.endsWith('.mjs')) {
-    return mime.includes('javascript');
+    return mime === 'application/javascript' || mime === 'text/javascript';
   }
   if (lowerPath.endsWith('.css')) {
     return mime === 'text/css';
@@ -135,5 +135,5 @@ export function isCacheableStaticAssetResponse(
     return mime === 'application/manifest+json' || mime === 'application/json';
   }
 
-  return true;
+  return false;
 }

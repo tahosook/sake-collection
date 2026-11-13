@@ -176,6 +176,21 @@ describe('pwaPolicy (Service Worker ポリシー純粋関数)', () => {
       expect(
         isCacheableStaticAssetResponse('/api/sync-config', 200, false, 'basic', 'application/json')
       ).toBe(false);
+      expect(
+        isCacheableStaticAssetResponse('/assets/data.json', 200, false, 'basic', 'application/json')
+      ).toBe(false);
+      expect(
+        isCacheableStaticAssetResponse('/icons/photo.jpg', 200, false, 'basic', 'image/jpeg')
+      ).toBe(false);
+      expect(
+        isCacheableStaticAssetResponse(
+          '/assets/index-abc.js',
+          200,
+          false,
+          'basic',
+          'application/notjavascript'
+        )
+      ).toBe(false);
     });
   });
 
@@ -351,6 +366,49 @@ describe('pwaPolicy (Service Worker ポリシー純粋関数)', () => {
       expect(store.has('sake-shell-old-version')).toBe(false);
       expect(store.has('__SAKE_CACHE_VERSION__')).toBe(true);
       expect(claim).toHaveBeenCalledTimes(1);
+    });
+
+    it('静的アセットは許可拡張子かつ厳密 MIME 一致のときのみキャッシュし、.json / .jpg / 不正 MIME はキャッシュしないこと', async () => {
+      const mimeMap: Record<string, string> = {
+        '/assets/index-abc.js': 'application/javascript; charset=utf-8',
+        '/assets/bad-mime.js': 'application/notjavascript',
+        '/assets/data.json': 'application/json',
+        '/icons/photo.jpg': 'image/jpeg',
+      };
+
+      const mockFetch = vi.fn(async (input: RequestInfo | URL) => {
+        const reqUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const pathname = new URL(reqUrl).pathname;
+        return {
+          status: 200,
+          redirected: false,
+          type: 'basic',
+          headers: new Headers({ 'content-type': mimeMap[pathname] ?? 'application/octet-stream' }),
+          clone() {
+            return this;
+          },
+        } as unknown as Response;
+      });
+
+      const { listeners, store } = createSwTestHarness(mockFetch);
+      const onFetch = listeners.get('fetch')!;
+
+      for (const pathname of Object.keys(mimeMap)) {
+        let resPromise: Promise<Response> | undefined;
+        onFetch({
+          request: { url: `${ORIGIN}${pathname}`, method: 'GET', mode: 'cors' },
+          respondWith: (p: Promise<Response>) => {
+            resPromise = p;
+          },
+        });
+        await resPromise!;
+      }
+
+      const bucket = store.get('__SAKE_CACHE_VERSION__')!;
+      expect(bucket.has('/assets/index-abc.js')).toBe(true);
+      expect(bucket.has('/assets/bad-mime.js')).toBe(false);
+      expect(bucket.has('/assets/data.json')).toBe(false);
+      expect(bucket.has('/icons/photo.jpg')).toBe(false);
     });
   });
 });
