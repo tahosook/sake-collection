@@ -23,7 +23,7 @@ export const BottleCard: React.FC<BottleCardProps> = ({ group, photo, onClick })
           <img
             src={photo.dataUrl}
             alt={group.name}
-            className="w-full h-full object-contain"
+            className="w-full h-full object-cover object-[50%_70%]"
             loading="lazy"
           />
         ) : (
