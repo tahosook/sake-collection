@@ -62,7 +62,7 @@ export const BottleHistoryList: React.FC<BottleHistoryListProps> = ({
                 <img
                   src={photo.dataUrl}
                   alt={bottle.name}
-                  className="w-full h-full object-cover object-[50%_75%]"
+                  className="w-full h-full object-cover object-[50%_90%]"
                   loading="lazy"
                 />
               ) : (
