@@ -3,6 +3,10 @@
 手持ちのお酒が何本あって、それぞれ何なのかが、開けばすぐ分かるアプリ。
 主目的は「どんなお酒を持っているかを知ること」。ローカルファーストの PWA（本人専用）。
 
+## アプリ
+
+https://sake-collection-cs2.pages.dev/ （Cloudflare Pages で公開中。利用にはログインが必要です）
+
 ## ドキュメント
 
 - [要件定義書](docs/requirements.md)
