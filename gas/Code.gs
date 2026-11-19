@@ -1,17 +1,52 @@
 /**
  * sake-collection GAS バックエンド (Google Apps Script)
  *
- * 設計: docs/step3-4-design.md §2, §3
+ * 設計: docs/step3-4-design.md §2, §3 / docs/audit-fixes-design.md (M2, M3, M5, D3)
  * 役割:
  * - 単一エンドポイント (doPost) による同期・バックアップサーバー
  * - 合言葉による fail-closed 認証 (定数時間比較)
- * - Google Sheets (Bottles / Photos / SyncMeta) によるメタデータ管理
- * - Google Drive による非公開写真保存・contentHash 重複排除・ゴミ箱管理
+ * - Google Sheets (Bottles / Photos / SyncMeta) による非破壊バッチ上書き管理
+ * - Google Drive による非公開写真保存・contentHash 重複排除・ゴミ箱管理・3値エラー判定
  * - 誤接続防止ガード (appIdentifier: 'sake-collection')
+ * - リクエストスキーマ検証・未来日時ガード (+24h)・大量削除ガード (MASS_DELETE_BLOCKED)
  */
 
 var APP_IDENTIFIER = 'sake-collection';
 var SCHEMA_VERSION = '1';
+
+var BOTTLE_HEADERS = ['id', 'updatedAt', 'createdAt', 'deleted', 'name', 'category', 'status', 'recordJson'];
+var PHOTO_HEADERS = ['id', 'bottleId', 'contentHash', 'driveFileId', 'updatedAt', 'createdAt', 'deleted', 'metaJson'];
+var SYNC_META_HEADERS = ['key', 'value', 'updatedAt'];
+
+var MAX_CELL_LENGTH = 49000; // Google Sheets セル文字数上限 50,000 に対する安全上限
+var MAX_BOTTLES_PER_SYNC = 2000;
+var MAX_PHOTO_METAS_PER_SYNC = 10000;
+var MAX_DOWNLOAD_PHOTOS_PER_REQUEST = 10;
+var MAX_UPLOAD_PHOTO_BYTES = 5 * 1024 * 1024; // 5MB
+var FUTURE_TIMESTAMP_SKEW_MS = 24 * 60 * 60 * 1000; // +24時間
+
+var MASS_DELETE_MIN_EXISTING_FOR_MAJORITY = 5;
+var MASS_DELETE_MIN_COUNT_FOR_MAJORITY = 5;
+var MASS_DELETE_MIN_EXISTING_FOR_FULL_WIPE = 3;
+var MASS_TRASH_MAX_FILES_PER_SYNC = 20;
+
+var VALID_CATEGORIES = [
+  '日本酒',
+  'ワイン',
+  'ウイスキー',
+  'ジン',
+  '焼酎',
+  'ビール',
+  'ブランデー',
+  'シェリー',
+  'ウォッカ',
+  'その他',
+];
+var VALID_STATUSES = ['unopened', 'opened', 'finished', 'disposed'];
+
+var UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+var ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/;
+var HASH_HEX_REGEX = /^[0-9a-f]{64}$/i;
 
 /**
  * HTTP POST エンドポイント
@@ -26,7 +61,25 @@ function doPost(e) {
       });
     }
 
-    var request = JSON.parse(e.postData.contents);
+    var request;
+    try {
+      request = JSON.parse(e.postData.contents);
+    } catch (_parseError) {
+      return makeJsonResponse({
+        ok: false,
+        errorCode: 'BAD_REQUEST',
+        message: 'リクエスト JSON の構文が不正です',
+      });
+    }
+
+    if (!request || typeof request !== 'object' || Array.isArray(request)) {
+      return makeJsonResponse({
+        ok: false,
+        errorCode: 'BAD_REQUEST',
+        message: 'リクエストボディは JSON オブジェクトである必要があります',
+      });
+    }
+
     var action = request.action;
 
     // 1. サーバー設定 (スクリプトプロパティ) の fail-closed チェック
@@ -183,6 +236,324 @@ function makeJsonResponse(data) {
 }
 
 // ==========================================
+// 入力検証・日時チェックヘルパー (M5)
+// ==========================================
+
+function isPlainObject(val) {
+  return Boolean(val) && typeof val === 'object' && !Array.isArray(val);
+}
+
+function isValidIsoUtc(val) {
+  if (typeof val !== 'string' || !ISO_DATE_REGEX.test(val)) {
+    return false;
+  }
+  return !isNaN(Date.parse(val));
+}
+
+function makePayloadError(errorCode, message) {
+  return {
+    ok: false,
+    error: {
+      ok: false,
+      errorCode: errorCode,
+      message: message,
+    },
+  };
+}
+
+function validateBottlePayload(b, index, maxAllowedFutureMs) {
+  var prefix = 'bottles[' + index + ']';
+  if (!isPlainObject(b)) {
+    return makePayloadError('INVALID_PAYLOAD', prefix + ' がオブジェクトではありません');
+  }
+  if (typeof b.id !== 'string' || !UUID_REGEX.test(b.id)) {
+    return makePayloadError('INVALID_PAYLOAD', prefix + '.id が UUID 形式ではありません');
+  }
+  if (typeof b.name !== 'string' || b.name.trim().length === 0) {
+    return makePayloadError('INVALID_PAYLOAD', prefix + '.name は空にできません');
+  }
+  if (typeof b.category !== 'string' || VALID_CATEGORIES.indexOf(b.category) === -1) {
+    return makePayloadError('INVALID_PAYLOAD', prefix + '.category が不正です: ' + String(b.category));
+  }
+  if (typeof b.status !== 'string' || VALID_STATUSES.indexOf(b.status) === -1) {
+    return makePayloadError('INVALID_PAYLOAD', prefix + '.status が不正です: ' + String(b.status));
+  }
+  if (!isValidIsoUtc(b.createdAt)) {
+    return makePayloadError('INVALID_PAYLOAD', prefix + '.createdAt が ISO 8601 UTC 日時ではありません');
+  }
+  if (!isValidIsoUtc(b.updatedAt)) {
+    return makePayloadError('INVALID_PAYLOAD', prefix + '.updatedAt が ISO 8601 UTC 日時ではありません');
+  }
+  if (Date.parse(b.createdAt) > maxAllowedFutureMs || Date.parse(b.updatedAt) > maxAllowedFutureMs) {
+    return makePayloadError(
+      'INVALID_TIMESTAMP',
+      prefix + ' にサーバー時刻より24時間以上未来の日時が指定されているため拒否しました'
+    );
+  }
+  if (typeof b.deleted !== 'boolean') {
+    return makePayloadError('INVALID_PAYLOAD', prefix + '.deleted は真偽値である必要があります');
+  }
+  if (!Array.isArray(b.photoIds)) {
+    return makePayloadError('INVALID_PAYLOAD', prefix + '.photoIds は配列である必要があります');
+  }
+  for (var i = 0; i < b.photoIds.length; i++) {
+    if (typeof b.photoIds[i] !== 'string' || !UUID_REGEX.test(b.photoIds[i])) {
+      return makePayloadError('INVALID_PAYLOAD', prefix + '.photoIds[' + i + '] が UUID 形式ではありません');
+    }
+  }
+  if (
+    b.primaryPhotoId !== null &&
+    b.primaryPhotoId !== undefined &&
+    (typeof b.primaryPhotoId !== 'string' || !UUID_REGEX.test(b.primaryPhotoId))
+  ) {
+    return makePayloadError('INVALID_PAYLOAD', prefix + '.primaryPhotoId が不正です');
+  }
+  return { ok: true };
+}
+
+function validatePhotoMetaPayload(p, fieldName, index, maxAllowedFutureMs) {
+  var prefix = fieldName + '[' + index + ']';
+  if (!isPlainObject(p)) {
+    return makePayloadError('INVALID_PAYLOAD', prefix + ' がオブジェクトではありません');
+  }
+  if (typeof p.id !== 'string' || !UUID_REGEX.test(p.id)) {
+    return makePayloadError('INVALID_PAYLOAD', prefix + '.id が UUID 形式ではありません');
+  }
+  if (typeof p.bottleId !== 'string' || !UUID_REGEX.test(p.bottleId)) {
+    return makePayloadError('INVALID_PAYLOAD', prefix + '.bottleId が UUID 形式ではありません');
+  }
+  if (p.mimeType !== 'image/jpeg' && p.mimeType !== 'image/webp') {
+    return makePayloadError('INVALID_PAYLOAD', prefix + '.mimeType が不正です');
+  }
+  if (typeof p.contentHash !== 'string' || !HASH_HEX_REGEX.test(p.contentHash)) {
+    return makePayloadError('INVALID_PAYLOAD', prefix + '.contentHash が64桁の16進数ではありません');
+  }
+  if (
+    p.driveFileId !== null &&
+    p.driveFileId !== undefined &&
+    (typeof p.driveFileId !== 'string' || p.driveFileId.trim().length === 0)
+  ) {
+    return makePayloadError('INVALID_PAYLOAD', prefix + '.driveFileId が不正です');
+  }
+  if (!isValidIsoUtc(p.createdAt)) {
+    return makePayloadError('INVALID_PAYLOAD', prefix + '.createdAt が ISO 8601 UTC 日時ではありません');
+  }
+  if (!isValidIsoUtc(p.updatedAt)) {
+    return makePayloadError('INVALID_PAYLOAD', prefix + '.updatedAt が ISO 8601 UTC 日時ではありません');
+  }
+  if (Date.parse(p.createdAt) > maxAllowedFutureMs || Date.parse(p.updatedAt) > maxAllowedFutureMs) {
+    return makePayloadError(
+      'INVALID_TIMESTAMP',
+      prefix + ' にサーバー時刻より24時間以上未来の日時が指定されているため拒否しました'
+    );
+  }
+  if (typeof p.deleted !== 'boolean') {
+    return makePayloadError('INVALID_PAYLOAD', prefix + '.deleted は真偽値である必要があります');
+  }
+  return { ok: true };
+}
+
+function validateSyncMetadataRequest(request, nowMs) {
+  if (!Array.isArray(request.bottles)) {
+    return makePayloadError('INVALID_PAYLOAD', 'bottles は配列である必要があります');
+  }
+  if (!Array.isArray(request.photoMetas)) {
+    return makePayloadError('INVALID_PAYLOAD', 'photoMetas は配列である必要があります');
+  }
+  if (request.pendingDeletedPhotos !== undefined && !Array.isArray(request.pendingDeletedPhotos)) {
+    return makePayloadError('INVALID_PAYLOAD', 'pendingDeletedPhotos は配列である必要があります');
+  }
+
+  var pendingDeletedPhotos = request.pendingDeletedPhotos || [];
+  if (request.bottles.length > MAX_BOTTLES_PER_SYNC) {
+    return makePayloadError(
+      'INVALID_PAYLOAD',
+      '1回の同期で送信できるボトル件数の上限（' + MAX_BOTTLES_PER_SYNC + '件）を超えています'
+    );
+  }
+  if (request.photoMetas.length > MAX_PHOTO_METAS_PER_SYNC || pendingDeletedPhotos.length > MAX_PHOTO_METAS_PER_SYNC) {
+    return makePayloadError(
+      'INVALID_PAYLOAD',
+      '1回の同期で送信できる写真メタ件数の上限（' + MAX_PHOTO_METAS_PER_SYNC + '件）を超えています'
+    );
+  }
+
+  var maxAllowedFutureMs = nowMs + FUTURE_TIMESTAMP_SKEW_MS;
+
+  for (var i = 0; i < request.bottles.length; i++) {
+    var bRes = validateBottlePayload(request.bottles[i], i, maxAllowedFutureMs);
+    if (!bRes.ok) {
+      return bRes;
+    }
+  }
+
+  for (var j = 0; j < request.photoMetas.length; j++) {
+    var pRes = validatePhotoMetaPayload(request.photoMetas[j], 'photoMetas', j, maxAllowedFutureMs);
+    if (!pRes.ok) {
+      return pRes;
+    }
+  }
+
+  for (var k = 0; k < pendingDeletedPhotos.length; k++) {
+    var pdRes = validatePhotoMetaPayload(pendingDeletedPhotos[k], 'pendingDeletedPhotos', k, maxAllowedFutureMs);
+    if (!pdRes.ok) {
+      return pdRes;
+    }
+  }
+
+  return { ok: true };
+}
+
+function validateUploadPhotoRequest(request, nowMs) {
+  var photo = request.photo;
+  if (!isPlainObject(photo)) {
+    return makePayloadError('INVALID_PHOTO_PAYLOAD', '写真ペイロードが不正です（photo オブジェクトが必要です）');
+  }
+  if (typeof photo.id !== 'string' || !UUID_REGEX.test(photo.id)) {
+    return makePayloadError('INVALID_PHOTO_PAYLOAD', '写真 ID が UUID 形式ではありません');
+  }
+  if (typeof photo.bottleId !== 'string' || !UUID_REGEX.test(photo.bottleId)) {
+    return makePayloadError('INVALID_PHOTO_PAYLOAD', '写真の bottleId が UUID 形式ではありません');
+  }
+  if (typeof photo.contentHash !== 'string' || !HASH_HEX_REGEX.test(photo.contentHash)) {
+    return makePayloadError('INVALID_PHOTO_PAYLOAD', '写真の contentHash が64桁の16進数ではありません');
+  }
+  if (photo.mimeType !== undefined && photo.mimeType !== 'image/jpeg' && photo.mimeType !== 'image/webp') {
+    return makePayloadError('INVALID_PHOTO_PAYLOAD', '写真の mimeType は image/jpeg または image/webp のみ許可されています');
+  }
+
+  var maxAllowedFutureMs = nowMs + FUTURE_TIMESTAMP_SKEW_MS;
+  if (photo.createdAt !== undefined) {
+    if (!isValidIsoUtc(photo.createdAt)) {
+      return makePayloadError('INVALID_PHOTO_PAYLOAD', '写真の createdAt が ISO 8601 UTC 日時ではありません');
+    }
+    if (Date.parse(photo.createdAt) > maxAllowedFutureMs) {
+      return makePayloadError('INVALID_TIMESTAMP', '写真の createdAt が未来すぎるため拒否しました');
+    }
+  }
+  if (photo.updatedAt !== undefined) {
+    if (!isValidIsoUtc(photo.updatedAt)) {
+      return makePayloadError('INVALID_PHOTO_PAYLOAD', '写真の updatedAt が ISO 8601 UTC 日時ではありません');
+    }
+    if (Date.parse(photo.updatedAt) > maxAllowedFutureMs) {
+      return makePayloadError('INVALID_TIMESTAMP', '写真の updatedAt が未来すぎるため拒否しました');
+    }
+  }
+
+  if (typeof photo.dataUrl !== 'string') {
+    return makePayloadError('INVALID_PHOTO_PAYLOAD', '写真ペイロードに dataUrl が含まれていません');
+  }
+  var matches = photo.dataUrl.match(/^data:(image\/jpeg|image\/webp);base64,([A-Za-z0-9+/=\r\n]+)$/);
+  if (!matches || !matches[1] || !matches[2]) {
+    return makePayloadError(
+      'INVALID_DATA_URL',
+      'dataUrl の形式が不正です (data:image/jpeg;base64,... または data:image/webp;base64,... が必要です)'
+    );
+  }
+  if (photo.mimeType && photo.mimeType !== matches[1]) {
+    return makePayloadError('INVALID_DATA_URL', 'mimeType と dataUrl のメディア種別が一致しません');
+  }
+
+  var decodedBytes = Utilities.base64Decode(matches[2]);
+  if (!decodedBytes || decodedBytes.length === 0) {
+    return makePayloadError('INVALID_DATA_URL', '画像データが空です');
+  }
+  if (decodedBytes.length > MAX_UPLOAD_PHOTO_BYTES) {
+    return makePayloadError(
+      'INVALID_PHOTO_PAYLOAD',
+      '写真サイズが上限（5MB）を超えているため拒否しました'
+    );
+  }
+
+  return {
+    ok: true,
+    mimeType: matches[1],
+    decodedBytes: decodedBytes,
+  };
+}
+
+function validateDownloadPhotosRequest(request) {
+  if (!Array.isArray(request.photoIds)) {
+    return makePayloadError('INVALID_PAYLOAD', 'photoIds は配列である必要があります');
+  }
+  if (request.photoIds.length > MAX_DOWNLOAD_PHOTOS_PER_REQUEST) {
+    return makePayloadError(
+      'INVALID_PAYLOAD',
+      '1回でダウンロードできる写真数の上限（' + MAX_DOWNLOAD_PHOTOS_PER_REQUEST + '枚）を超えています'
+    );
+  }
+  for (var i = 0; i < request.photoIds.length; i++) {
+    if (typeof request.photoIds[i] !== 'string' || !UUID_REGEX.test(request.photoIds[i])) {
+      return makePayloadError('INVALID_PAYLOAD', 'photoIds[' + i + '] が UUID 形式ではありません');
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * 大量削除・全消去防止ガード (M5)
+ */
+function checkMassDeleteGuard(serverBottles, mergedBottles, driveTrashCount) {
+  var existingActiveMap = {};
+  var existingActiveCount = 0;
+  for (var i = 0; i < serverBottles.length; i++) {
+    var sb = serverBottles[i];
+    if (sb && !sb.deleted) {
+      existingActiveMap[sb.id] = true;
+      existingActiveCount++;
+    }
+  }
+
+  var mergedMap = {};
+  var resultingActiveCount = 0;
+  for (var j = 0; j < mergedBottles.length; j++) {
+    var mb = mergedBottles[j];
+    mergedMap[mb.id] = mb;
+    if (!mb.deleted) {
+      resultingActiveCount++;
+    }
+  }
+
+  var newlyDeletedCount = 0;
+  for (var id in existingActiveMap) {
+    var after = mergedMap[id];
+    if (!after || after.deleted) {
+      newlyDeletedCount++;
+    }
+  }
+
+  if (
+    existingActiveCount >= MASS_DELETE_MIN_EXISTING_FOR_FULL_WIPE &&
+    resultingActiveCount === 0
+  ) {
+    return makePayloadError(
+      'MASS_DELETE_BLOCKED',
+      '安全保護のため、既存の全ボトル（' + existingActiveCount + '本）を一度にすべて削除する同期を中止しました。'
+    );
+  }
+
+  if (
+    existingActiveCount >= MASS_DELETE_MIN_EXISTING_FOR_MAJORITY &&
+    newlyDeletedCount >= MASS_DELETE_MIN_COUNT_FOR_MAJORITY &&
+    newlyDeletedCount * 2 > existingActiveCount
+  ) {
+    return makePayloadError(
+      'MASS_DELETE_BLOCKED',
+      '安全保護のため、過半数のボトル（' + existingActiveCount + '本中 ' + newlyDeletedCount + '本）を一度に削除する同期を中止しました。'
+    );
+  }
+
+  if (driveTrashCount > MASS_TRASH_MAX_FILES_PER_SYNC) {
+    return makePayloadError(
+      'MASS_DELETE_BLOCKED',
+      '安全保護のため、1回の同期で上限（' + MASS_TRASH_MAX_FILES_PER_SYNC + '件）を超える写真ファイル（' + driveTrashCount + '件）をゴミ箱へ移動する操作を中止しました。'
+    );
+  }
+
+  return { ok: true };
+}
+
+// ==========================================
 // スプレッドシート・Drive 管理
 // ==========================================
 
@@ -192,15 +563,9 @@ function makeJsonResponse(data) {
 function getSpreadsheetContext(spreadsheetId) {
   try {
     var ss = SpreadsheetApp.openById(spreadsheetId);
-    var bottlesSheet = getOrCreateSheet(ss, 'Bottles', [
-      'id', 'updatedAt', 'createdAt', 'deleted', 'name', 'category', 'status', 'recordJson',
-    ]);
-    var photosSheet = getOrCreateSheet(ss, 'Photos', [
-      'id', 'bottleId', 'contentHash', 'driveFileId', 'updatedAt', 'createdAt', 'deleted', 'metaJson',
-    ]);
-    var syncMetaSheet = getOrCreateSheet(ss, 'SyncMeta', [
-      'key', 'value', 'updatedAt',
-    ]);
+    var bottlesSheet = getOrCreateSheet(ss, 'Bottles', BOTTLE_HEADERS);
+    var photosSheet = getOrCreateSheet(ss, 'Photos', PHOTO_HEADERS);
+    var syncMetaSheet = getOrCreateSheet(ss, 'SyncMeta', SYNC_META_HEADERS);
 
     // appIdentifier と schemaVersion の整合性チェック (誤接続防止ハードストップ)
     var metaValues = syncMetaSheet.getDataRange().getValues();
@@ -299,107 +664,234 @@ function getDriveFolderContext(folderId) {
   }
 }
 
+function makeDriveTemporaryError(error) {
+  var detail = error && error.message ? error.message : String(error || '');
+  return {
+    ok: false,
+    errorCode: 'DRIVE_TEMPORARY_ERROR',
+    message: 'Google Drive への一時的なアクセスエラーが発生しました。少し時間をおいて再度お試しください。' +
+      (detail ? ' (' + detail + ')' : ''),
+  };
+}
+
+function isExplicitDriveNotFoundError(error) {
+  var msg = error && error.message ? String(error.message) : String(error || '');
+  return /No item with the given ID could be found|File not found|Item not found|指定された.*見つかりません/i.test(msg);
+}
+
 /**
- * Drive ファイルが存在し、ゴミ箱 (trashed) に入っていないか検証する
+ * フォルダ内の有効（非ゴミ箱）ファイル ID 集合を一括取得する
  */
-function isDriveFileActive(fileId) {
+function buildActiveDriveFolderFileSet(folder) {
+  try {
+    var activeSet = {};
+    var files = folder.getFiles();
+    while (files.hasNext()) {
+      var file = files.next();
+      if (!file.isTrashed()) {
+        activeSet[file.getId()] = true;
+      }
+    }
+    return { ok: true, activeSet: activeSet };
+  } catch (error) {
+    return {
+      ok: false,
+      error: makeDriveTemporaryError(error),
+    };
+  }
+}
+
+/**
+ * Drive ファイルの状態を 3値 ('active' | 'missing' | 'error') で判定する (M3)
+ */
+function checkDriveFileStatus(fileId, activeFolderFileSet) {
   if (!fileId || typeof fileId !== 'string') {
-    return false;
+    return { status: 'missing' };
+  }
+  if (activeFolderFileSet && activeFolderFileSet[fileId] === true) {
+    return { status: 'active' };
   }
   try {
     var file = DriveApp.getFileById(fileId);
-    return !file.isTrashed();
-  } catch (_e) {
-    return false;
+    if (file.isTrashed()) {
+      return { status: 'missing' };
+    }
+    return { status: 'active' };
+  } catch (error) {
+    if (isExplicitDriveNotFoundError(error)) {
+      return { status: 'missing' };
+    }
+    return {
+      status: 'error',
+      error: makeDriveTemporaryError(error),
+    };
   }
 }
 
 // ==========================================
-// シートデータ読み書き
+// シートデータ読み書き (M2: fail-closed & 非破壊上書き)
 // ==========================================
 
-function readServerBottles(bottlesSheet) {
-  var values = bottlesSheet.getDataRange().getValues();
-  var list = [];
-  for (var i = 1; i < values.length; i++) {
-    var row = values[i];
-    var jsonStr = row[7];
-    if (jsonStr) {
-      try {
-        var record = JSON.parse(jsonStr);
-        list.push(record);
-      } catch (_e) {
-        // パースエラー行はスキップ
-      }
+function isSheetRowEmpty(row) {
+  if (!row) return true;
+  for (var i = 0; i < row.length; i++) {
+    var cell = row[i];
+    if (cell !== '' && cell !== null && cell !== undefined) {
+      return false;
     }
   }
-  return list;
+  return true;
 }
 
-function writeServerBottles(bottlesSheet, bottles) {
-  var rows = bottles.map(function (b) {
-    return [
-      b.id,
-      b.updatedAt,
-      b.createdAt,
-      b.deleted === true,
-      b.name || '',
-      b.category || '',
-      b.status || '',
-      JSON.stringify(b),
-    ];
-  });
+function readServerRecords(sheet, sheetLabel) {
+  var values = sheet.getDataRange().getValues();
+  var list = [];
+  var rowIndexById = {};
 
-  bottlesSheet.clearContents();
-  bottlesSheet.appendRow([
-    'id', 'updatedAt', 'createdAt', 'deleted', 'name', 'category', 'status', 'recordJson',
-  ]);
-  bottlesSheet.setFrozenRows(1);
-  if (rows.length > 0) {
-    bottlesSheet.getRange(2, 1, rows.length, 8).setValues(rows);
+  for (var i = 1; i < values.length; i++) {
+    var row = values[i];
+    if (isSheetRowEmpty(row)) {
+      continue;
+    }
+    var jsonStr = row[7];
+    if (typeof jsonStr !== 'string' || jsonStr.trim().length === 0) {
+      return {
+        ok: false,
+        error: {
+          ok: false,
+          errorCode: 'CORRUPTED_SHEET_DATA',
+          message: 'シート（' + sheetLabel + '）の ' + (i + 1) + ' 行目の JSON 列が空のため処理を中止しました',
+        },
+      };
+    }
+
+    var record;
+    try {
+      record = JSON.parse(jsonStr);
+    } catch (_e) {
+      return {
+        ok: false,
+        error: {
+          ok: false,
+          errorCode: 'CORRUPTED_SHEET_DATA',
+          message: 'シート（' + sheetLabel + '）の ' + (i + 1) + ' 行目の JSON が破損しているため処理を中止しました',
+        },
+      };
+    }
+
+    if (!isPlainObject(record) || typeof record.id !== 'string' || record.id.trim().length === 0) {
+      return {
+        ok: false,
+        error: {
+          ok: false,
+          errorCode: 'CORRUPTED_SHEET_DATA',
+          message: 'シート（' + sheetLabel + '）の ' + (i + 1) + ' 行目のレコード形式が不正なため処理を中止しました',
+        },
+      };
+    }
+
+    list.push(record);
+    rowIndexById[record.id] = i + 1;
   }
+
+  return {
+    ok: true,
+    records: list,
+    rowIndexById: rowIndexById,
+  };
+}
+
+function readServerBottles(bottlesSheet) {
+  return readServerRecords(bottlesSheet, 'Bottles');
 }
 
 function readServerPhotoMetas(photosSheet) {
-  var values = photosSheet.getDataRange().getValues();
-  var list = [];
-  for (var i = 1; i < values.length; i++) {
-    var row = values[i];
-    var jsonStr = row[7];
-    if (jsonStr) {
-      try {
-        var meta = JSON.parse(jsonStr);
-        list.push(meta);
-      } catch (_e) {
-        // パースエラー行はスキップ
+  return readServerRecords(photosSheet, 'Photos');
+}
+
+function buildBottleRow(b) {
+  return [
+    b.id,
+    b.updatedAt,
+    b.createdAt,
+    b.deleted === true,
+    b.name || '',
+    b.category || '',
+    b.status || '',
+    JSON.stringify(b),
+  ];
+}
+
+function buildPhotoRow(p) {
+  return [
+    p.id,
+    p.bottleId,
+    p.contentHash,
+    p.driveFileId || '',
+    p.updatedAt,
+    p.createdAt,
+    p.deleted === true,
+    JSON.stringify(p),
+  ];
+}
+
+function validateRowsCellLength(allRows, sheetLabel) {
+  for (var r = 0; r < allRows.length; r++) {
+    var row = allRows[r];
+    for (var c = 0; c < row.length; c++) {
+      var cell = row[c];
+      if (typeof cell === 'string' && cell.length > MAX_CELL_LENGTH) {
+        return {
+          ok: false,
+          error: {
+            ok: false,
+            errorCode: 'RECORD_TOO_LARGE',
+            message: 'シート（' + sheetLabel + '）の保存データがセル文字数上限（' + MAX_CELL_LENGTH + '文字）を超えています',
+          },
+        };
       }
     }
   }
-  return list;
+  return { ok: true };
 }
 
-function writeServerPhotoMetas(photosSheet, photoMetas) {
-  var rows = photoMetas.map(function (p) {
-    return [
-      p.id,
-      p.bottleId,
-      p.contentHash,
-      p.driveFileId || '',
-      p.updatedAt,
-      p.createdAt,
-      p.deleted === true,
-      JSON.stringify(p),
-    ];
-  });
-
-  photosSheet.clearContents();
-  photosSheet.appendRow([
-    'id', 'bottleId', 'contentHash', 'driveFileId', 'updatedAt', 'createdAt', 'deleted', 'metaJson',
-  ]);
-  photosSheet.setFrozenRows(1);
-  if (rows.length > 0) {
-    photosSheet.getRange(2, 1, rows.length, 8).setValues(rows);
+/**
+ * clearContents() を使わず、単一の setValues で上書きし、余剰末尾行のみ事後クリアする (M2)
+ */
+function writeSheetRowsSafely(sheet, headers, rows, sheetLabel) {
+  var allRows = [headers].concat(rows);
+  var lengthCheck = validateRowsCellLength(allRows, sheetLabel);
+  if (!lengthCheck.ok) {
+    return lengthCheck;
   }
+
+  var prevLastRow = sheet.getLastRow();
+  var prevLastCol = sheet.getLastColumn();
+
+  sheet.getRange(1, 1, allRows.length, headers.length).setValues(allRows);
+  sheet.setFrozenRows(1);
+
+  if (prevLastRow > allRows.length) {
+    var clearCols = Math.max(headers.length, prevLastCol);
+    sheet.getRange(allRows.length + 1, 1, prevLastRow - allRows.length, clearCols).clearContent();
+  }
+
+  return { ok: true };
+}
+
+function upsertServerPhotoMeta(photosSheet, photoMeta, existingRowIndex) {
+  var row = buildPhotoRow(photoMeta);
+  var lengthCheck = validateRowsCellLength([row], 'Photos');
+  if (!lengthCheck.ok) {
+    return lengthCheck;
+  }
+
+  if (existingRowIndex && existingRowIndex >= 2) {
+    photosSheet.getRange(existingRowIndex, 1, 1, PHOTO_HEADERS.length).setValues([row]);
+  } else {
+    photosSheet.appendRow(row);
+  }
+  return { ok: true };
 }
 
 function updateLastSyncedAt(syncMetaSheet, isoString) {
@@ -412,8 +904,7 @@ function updateLastSyncedAt(syncMetaSheet, isoString) {
     }
   }
   if (foundRow !== -1) {
-    syncMetaSheet.getRange(foundRow, 2).setValue(isoString);
-    syncMetaSheet.getRange(foundRow, 3).setValue(isoString);
+    syncMetaSheet.getRange(foundRow, 2, 1, 2).setValues([[isoString, isoString]]);
   } else {
     syncMetaSheet.appendRow(['lastSyncedAt', isoString, isoString]);
   }
@@ -437,8 +928,17 @@ function getLastSyncedAt(syncMetaSheet) {
  * 1. ping アクション
  */
 function handlePing(ssContext, _driveContext) {
-  var bottles = readServerBottles(ssContext.bottlesSheet);
-  var photos = readServerPhotoMetas(ssContext.photosSheet);
+  var bottlesRes = readServerBottles(ssContext.bottlesSheet);
+  if (!bottlesRes.ok) {
+    return makeJsonResponse(bottlesRes.error);
+  }
+  var photosRes = readServerPhotoMetas(ssContext.photosSheet);
+  if (!photosRes.ok) {
+    return makeJsonResponse(photosRes.error);
+  }
+
+  var bottles = bottlesRes.records;
+  var photos = photosRes.records;
 
   var bottlesActive = bottles.filter(function (b) { return !b.deleted; }).length;
   var photosActive = photos.filter(function (p) { return !p.deleted; }).length;
@@ -461,14 +961,33 @@ function handlePing(ssContext, _driveContext) {
 /**
  * 2. sync_metadata アクション
  */
-function handleSyncMetadata(request, ssContext, _driveContext) {
-  var clientBottles = Array.isArray(request.bottles) ? request.bottles : [];
-  var clientPhotoMetas = Array.isArray(request.photoMetas) ? request.photoMetas : [];
-  var isInitialEmptyClient = Boolean(request.isInitialEmptyClient);
-  var nowIso = new Date().toISOString();
+function handleSyncMetadata(request, ssContext, driveContext) {
+  var nowMs = Date.now();
+  var nowIso = new Date(nowMs).toISOString();
 
-  var serverBottles = readServerBottles(ssContext.bottlesSheet);
-  var serverPhotoMetas = readServerPhotoMetas(ssContext.photosSheet);
+  // 1. ペイロードスキーマ・未来日時検証 (M5)
+  var reqVal = validateSyncMetadataRequest(request, nowMs);
+  if (!reqVal.ok) {
+    return makeJsonResponse(reqVal.error);
+  }
+
+  var clientBottles = request.bottles;
+  var clientPhotoMetas = request.photoMetas;
+  var pendingDeletedPhotos = Array.isArray(request.pendingDeletedPhotos) ? request.pendingDeletedPhotos : [];
+  var isInitialEmptyClient = Boolean(request.isInitialEmptyClient);
+
+  // 2. サーバー側シート読込 (M2: 破損行は fail-closed)
+  var serverBottlesRes = readServerBottles(ssContext.bottlesSheet);
+  if (!serverBottlesRes.ok) {
+    return makeJsonResponse(serverBottlesRes.error);
+  }
+  var serverPhotoMetasRes = readServerPhotoMetas(ssContext.photosSheet);
+  if (!serverPhotoMetasRes.ok) {
+    return makeJsonResponse(serverPhotoMetasRes.error);
+  }
+
+  var serverBottles = serverBottlesRes.records;
+  var serverPhotoMetas = serverPhotoMetasRes.records;
 
   // A. ボトルの LWW マージ (空端末保護対応)
   var mergedBottles = [];
@@ -512,7 +1031,7 @@ function handleSyncMetadata(request, ssContext, _driveContext) {
   var bottleMap = {};
   mergedBottles.forEach(function (b) { bottleMap[b.id] = b; });
 
-  // B. 写真メタデータの LWW マージ
+  // B. 写真メタデータの LWW マージ (pendingDeletedPhotos も合流)
   var rawMergedPhotoMetas = [];
   if (isInitialEmptyClient) {
     rawMergedPhotoMetas = serverPhotoMetas.slice();
@@ -521,10 +1040,18 @@ function handleSyncMetadata(request, ssContext, _driveContext) {
     serverPhotoMetas.forEach(function (p) { serverPhotoMap[p.id] = p; });
     var clientPhotoMap = {};
     clientPhotoMetas.forEach(function (p) { clientPhotoMap[p.id] = p; });
+    pendingDeletedPhotos.forEach(function (pd) {
+      var existing = clientPhotoMap[pd.id];
+      if (!existing || pd.updatedAt >= existing.updatedAt) {
+        clientPhotoMap[pd.id] = pd;
+      }
+    });
 
     var allPhotoIds = {};
     serverPhotoMetas.forEach(function (p) { allPhotoIds[p.id] = true; });
-    clientPhotoMetas.forEach(function (p) { allPhotoIds[p.id] = true; });
+    for (var cpId in clientPhotoMap) {
+      allPhotoIds[cpId] = true;
+    }
 
     for (var pId in allPhotoIds) {
       var sPhoto = serverPhotoMap[pId];
@@ -546,9 +1073,9 @@ function handleSyncMetadata(request, ssContext, _driveContext) {
         var merged = Object.assign({}, winning, { driveFileId: driveFileId });
         rawMergedPhotoMetas.push(merged);
       } else if (sPhoto) {
-        rawMergedPhotoMetas.push(sPhoto);
+        rawMergedPhotoMetas.push(Object.assign({}, sPhoto));
       } else if (cPhoto) {
-        rawMergedPhotoMetas.push(cPhoto);
+        rawMergedPhotoMetas.push(Object.assign({}, cPhoto));
       }
     }
   }
@@ -567,20 +1094,34 @@ function handleSyncMetadata(request, ssContext, _driveContext) {
     reconciledPhotoMetas.push(Object.assign({}, meta, { deleted: isDeleted }));
   }
 
-  // D. Drive 上の trashed 状態確認と重複排除マップの構築 (PR #11 申し送り事項)
-  // 有効な写真 (deleted === false) に限定して、既存の driveFileId が Drive 上で trashed でないか確認する
-  var activeDriveIdCache = {}; // driveFileId -> boolean
+  // D. Drive 上の 3値状態確認と重複排除マップの構築 (M3: 一時エラー時は driveFileId を消さず安全停止)
+  var hasAnyDriveId = reconciledPhotoMetas.some(function (p) { return Boolean(p.driveFileId); });
+  var activeFolderFileSet = null;
+  if (hasAnyDriveId) {
+    var folderFilesRes = buildActiveDriveFolderFileSet(driveContext.folder);
+    if (!folderFilesRes.ok) {
+      return makeJsonResponse(folderFilesRes.error);
+    }
+    activeFolderFileSet = folderFilesRes.activeSet;
+  }
+
+  var activeDriveIdCache = {}; // driveFileId -> 'active' | 'missing'
   var knownHashToDriveId = {}; // contentHash -> driveFileId
 
   for (var j = 0; j < reconciledPhotoMetas.length; j++) {
     var pMeta = reconciledPhotoMetas[j];
     if (pMeta.driveFileId) {
-      if (activeDriveIdCache[pMeta.driveFileId] === undefined) {
-        activeDriveIdCache[pMeta.driveFileId] = isDriveFileActive(pMeta.driveFileId);
+      var cachedStatus = activeDriveIdCache[pMeta.driveFileId];
+      if (!cachedStatus) {
+        var statusRes = checkDriveFileStatus(pMeta.driveFileId, activeFolderFileSet);
+        if (statusRes.status === 'error') {
+          return makeJsonResponse(statusRes.error);
+        }
+        cachedStatus = statusRes.status;
+        activeDriveIdCache[pMeta.driveFileId] = cachedStatus;
       }
-      var isActive = activeDriveIdCache[pMeta.driveFileId];
-      if (!isActive) {
-        // Drive 上で削除済み・存在しないファイル ID は死んだ ID としてクリア
+      if (cachedStatus === 'missing') {
+        // Drive 上でゴミ箱入りまたは明確に不存在のファイル ID のみクリア
         pMeta.driveFileId = null;
       } else if (!pMeta.deleted && pMeta.contentHash) {
         // 有効な写真のみ重複排除マップに登録
@@ -597,8 +1138,7 @@ function handleSyncMetadata(request, ssContext, _driveContext) {
     }
   }
 
-  // E. 孤立した Drive ファイルのゴミ箱移動 (setTrashed(true))
-  // 有効な写真のいずれからも参照されなくなった driveFileId を特定してゴミ箱へ移動
+  // E. 孤立した Drive ファイルの特定（この時点ではまだゴミ箱へ移動しない）
   var activeDriveIdsInUse = {};
   reconciledPhotoMetas.forEach(function (p) {
     if (!p.deleted && p.driveFileId) {
@@ -606,21 +1146,27 @@ function handleSyncMetadata(request, ssContext, _driveContext) {
     }
   });
 
+  var driveIdsToTrash = [];
+  var driveIdsToTrashSeen = {};
   reconciledPhotoMetas.forEach(function (p) {
-    if (p.deleted && p.driveFileId && !activeDriveIdsInUse[p.driveFileId]) {
-      try {
-        var fileToTrash = DriveApp.getFileById(p.driveFileId);
-        if (!fileToTrash.isTrashed()) {
-          fileToTrash.setTrashed(true);
-        }
-      } catch (_e) {
-        // 既にゴミ箱にあるかアクセスできない場合はスキップ
-      }
+    if (
+      p.deleted &&
+      p.driveFileId &&
+      !activeDriveIdsInUse[p.driveFileId] &&
+      !driveIdsToTrashSeen[p.driveFileId]
+    ) {
+      driveIdsToTrashSeen[p.driveFileId] = true;
+      driveIdsToTrash.push(p.driveFileId);
     }
   });
 
-  // F. アップロードが必要な写真 ID リスト (photosToUpload) の算出
-  // クライアント側で有効かつ driveFileId が未確定の写真 ID
+  // F. 大量削除・全消去防止ガード (M5: シート書込・Drive ゴミ箱移動より前に検査)
+  var massDeleteRes = checkMassDeleteGuard(serverBottles, mergedBottles, driveIdsToTrash.length);
+  if (!massDeleteRes.ok) {
+    return makeJsonResponse(massDeleteRes.error);
+  }
+
+  // G. アップロードが必要な写真 ID リスト (photosToUpload) の算出
   var photosToUpload = [];
   reconciledPhotoMetas.forEach(function (p) {
     if (!p.deleted && !p.driveFileId) {
@@ -630,7 +1176,7 @@ function handleSyncMetadata(request, ssContext, _driveContext) {
 
   reconciledPhotoMetas.sort(function (a, b) { return a.id.localeCompare(b.id); });
 
-  // G. 削除済みボトルのトームストーン正規化 (updatedAt は維持したまま photoIds: [], primaryPhotoId: null)
+  // H. 削除済みボトルのトームストーン正規化 (updatedAt は維持したまま photoIds: [], primaryPhotoId: null)
   var sanitizedBottles = mergedBottles.map(function (b) {
     if (b.deleted) {
       return Object.assign({}, b, {
@@ -641,10 +1187,40 @@ function handleSyncMetadata(request, ssContext, _driveContext) {
     return b;
   });
 
-  // H. シート一括書き込み
-  writeServerBottles(ssContext.bottlesSheet, sanitizedBottles);
-  writeServerPhotoMetas(ssContext.photosSheet, reconciledPhotoMetas);
+  // I. シート書き込みの事前セル長検証 (両シート書込前に検証)
+  var bottleRows = sanitizedBottles.map(buildBottleRow);
+  var photoRows = reconciledPhotoMetas.map(buildPhotoRow);
+  var bottleLenCheck = validateRowsCellLength([BOTTLE_HEADERS].concat(bottleRows), 'Bottles');
+  if (!bottleLenCheck.ok) {
+    return makeJsonResponse(bottleLenCheck.error);
+  }
+  var photoLenCheck = validateRowsCellLength([PHOTO_HEADERS].concat(photoRows), 'Photos');
+  if (!photoLenCheck.ok) {
+    return makeJsonResponse(photoLenCheck.error);
+  }
+
+  // J. シート非破壊一括上書き (M2)
+  var writeBottlesRes = writeSheetRowsSafely(ssContext.bottlesSheet, BOTTLE_HEADERS, bottleRows, 'Bottles');
+  if (!writeBottlesRes.ok) {
+    return makeJsonResponse(writeBottlesRes.error);
+  }
+  var writePhotosRes = writeSheetRowsSafely(ssContext.photosSheet, PHOTO_HEADERS, photoRows, 'Photos');
+  if (!writePhotosRes.ok) {
+    return makeJsonResponse(writePhotosRes.error);
+  }
   updateLastSyncedAt(ssContext.syncMetaSheet, nowIso);
+
+  // K. シート確定後に孤立した Drive ファイルをゴミ箱へ移動 (setTrashed(true))
+  driveIdsToTrash.forEach(function (fileId) {
+    try {
+      var fileToTrash = DriveApp.getFileById(fileId);
+      if (!fileToTrash.isTrashed()) {
+        fileToTrash.setTrashed(true);
+      }
+    } catch (_e) {
+      // 既にゴミ箱にあるか削除済みの場合はスキップ
+    }
+  });
 
   return makeJsonResponse({
     ok: true,
@@ -659,24 +1235,33 @@ function handleSyncMetadata(request, ssContext, _driveContext) {
  * 3. upload_photo アクション
  */
 function handleUploadPhoto(request, ssContext, driveContext) {
-  var photo = request.photo;
-  if (!photo || !photo.id || !photo.bottleId || !photo.contentHash || !photo.dataUrl) {
-    return makeJsonResponse({
-      ok: false,
-      errorCode: 'INVALID_PHOTO_PAYLOAD',
-      message: '写真ペイロードが不正です (id, bottleId, contentHash, dataUrl が必要です)',
-    });
+  var nowMs = Date.now();
+  var nowIso = new Date(nowMs).toISOString();
+
+  var valRes = validateUploadPhotoRequest(request, nowMs);
+  if (!valRes.ok) {
+    return makeJsonResponse(valRes.error);
   }
 
-  var photos = readServerPhotoMetas(ssContext.photosSheet);
-  var nowIso = new Date().toISOString();
+  var photo = request.photo;
+  var photosRes = readServerPhotoMetas(ssContext.photosSheet);
+  if (!photosRes.ok) {
+    return makeJsonResponse(photosRes.error);
+  }
 
-  // A. contentHash 重複排除: 既存の有効かつ trashed でないファイルを検索
+  var photos = photosRes.records;
+  var rowIndexById = photosRes.rowIndexById;
+
+  // A. contentHash 重複排除: 既存の有効かつ trashed でないファイルを検索 (M3: 3値判定)
   var deduplicatedDriveId = null;
   for (var i = 0; i < photos.length; i++) {
     var p = photos[i];
     if (p.contentHash === photo.contentHash && p.driveFileId && !p.deleted) {
-      if (isDriveFileActive(p.driveFileId)) {
+      var dupCheck = checkDriveFileStatus(p.driveFileId, null);
+      if (dupCheck.status === 'error') {
+        return makeJsonResponse(dupCheck.error);
+      }
+      if (dupCheck.status === 'active') {
         deduplicatedDriveId = p.driveFileId;
         break;
       }
@@ -688,42 +1273,33 @@ function handleUploadPhoto(request, ssContext, driveContext) {
 
   // B. 重複排除できなければ Drive に新規作成
   if (!finalDriveFileId) {
-    var matches = photo.dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-    if (!matches || !matches[1] || !matches[2]) {
-      return makeJsonResponse({
-        ok: false,
-        errorCode: 'INVALID_DATA_URL',
-        message: 'dataUrl の形式が不正です (data:image/...;base64,... 形式が必要です)',
-      });
-    }
-
-    var mimeType = matches[1];
-    var base64Data = matches[2];
+    var mimeType = valRes.mimeType;
     var ext = mimeType.indexOf('webp') !== -1 ? 'webp' : 'jpg';
     var fileName = 'sake-photo-' + photo.contentHash.slice(0, 12) + '-' + photo.id + '.' + ext;
 
-    var decodedBytes = Utilities.base64Decode(base64Data);
-    var blob = Utilities.newBlob(decodedBytes, mimeType, fileName);
+    var blob = Utilities.newBlob(valRes.decodedBytes, mimeType, fileName);
     var createdFile = driveContext.folder.createFile(blob);
     finalDriveFileId = createdFile.getId();
   }
 
-  // C. Photos シートのレコードを更新または追加
-  var found = false;
+  // C. Photos シートのレコードを単一行更新または追記 (M2: シート全消し禁止)
+  var targetMeta = null;
+  var existingRowIndex = rowIndexById[photo.id];
   for (var j = 0; j < photos.length; j++) {
     if (photos[j].id === photo.id) {
-      photos[j].driveFileId = finalDriveFileId;
-      photos[j].updatedAt = nowIso;
-      found = true;
+      targetMeta = Object.assign({}, photos[j], {
+        driveFileId: finalDriveFileId,
+        updatedAt: nowIso,
+      });
       break;
     }
   }
 
-  if (!found) {
-    var newMeta = {
+  if (!targetMeta) {
+    targetMeta = {
       id: photo.id,
       bottleId: photo.bottleId,
-      mimeType: photo.mimeType || 'image/jpeg',
+      mimeType: valRes.mimeType,
       width: photo.width || 0,
       height: photo.height || 0,
       byteSize: photo.byteSize || 0,
@@ -733,10 +1309,12 @@ function handleUploadPhoto(request, ssContext, driveContext) {
       updatedAt: nowIso,
       deleted: photo.deleted === true,
     };
-    photos.push(newMeta);
   }
 
-  writeServerPhotoMetas(ssContext.photosSheet, photos);
+  var upsertRes = upsertServerPhotoMeta(ssContext.photosSheet, targetMeta, existingRowIndex);
+  if (!upsertRes.ok) {
+    return makeJsonResponse(upsertRes.error);
+  }
   updateLastSyncedAt(ssContext.syncMetaSheet, nowIso);
 
   return makeJsonResponse({
@@ -751,7 +1329,12 @@ function handleUploadPhoto(request, ssContext, driveContext) {
  * 4. download_photos アクション
  */
 function handleDownloadPhotos(request, ssContext, _driveContext) {
-  var photoIds = Array.isArray(request.photoIds) ? request.photoIds : [];
+  var reqVal = validateDownloadPhotosRequest(request);
+  if (!reqVal.ok) {
+    return makeJsonResponse(reqVal.error);
+  }
+
+  var photoIds = request.photoIds;
   if (photoIds.length === 0) {
     return makeJsonResponse({
       ok: true,
@@ -759,7 +1342,12 @@ function handleDownloadPhotos(request, ssContext, _driveContext) {
     });
   }
 
-  var metas = readServerPhotoMetas(ssContext.photosSheet);
+  var metasRes = readServerPhotoMetas(ssContext.photosSheet);
+  if (!metasRes.ok) {
+    return makeJsonResponse(metasRes.error);
+  }
+
+  var metas = metasRes.records;
   var metaMap = {};
   metas.forEach(function (m) { metaMap[m.id] = m; });
 
@@ -791,8 +1379,10 @@ function handleDownloadPhotos(request, ssContext, _driveContext) {
             deleted: meta.deleted === true,
           });
         }
-      } catch (_e) {
-        // ファイル取得失敗時はスキップ
+      } catch (error) {
+        if (!isExplicitDriveNotFoundError(error)) {
+          return makeJsonResponse(makeDriveTemporaryError(error));
+        }
       }
     }
   }
