@@ -684,7 +684,7 @@ function isExplicitDriveNotFoundError(error) {
  */
 function buildActiveDriveFolderFileSet(folder) {
   try {
-    var activeSet = {};
+    var activeSet = Object.create(null);
     var files = folder.getFiles();
     while (files.hasNext()) {
       var file = files.next();
@@ -1105,8 +1105,8 @@ function handleSyncMetadata(request, ssContext, driveContext) {
     activeFolderFileSet = folderFilesRes.activeSet;
   }
 
-  var activeDriveIdCache = {}; // driveFileId -> 'active' | 'missing'
-  var knownHashToDriveId = {}; // contentHash -> driveFileId
+  var activeDriveIdCache = Object.create(null); // driveFileId -> 'active' | 'missing'
+  var knownHashToDriveId = Object.create(null); // contentHash -> driveFileId
 
   for (var j = 0; j < reconciledPhotoMetas.length; j++) {
     var pMeta = reconciledPhotoMetas[j];
@@ -1139,7 +1139,7 @@ function handleSyncMetadata(request, ssContext, driveContext) {
   }
 
   // E. 孤立した Drive ファイルの特定（この時点ではまだゴミ箱へ移動しない）
-  var activeDriveIdsInUse = {};
+  var activeDriveIdsInUse = Object.create(null);
   reconciledPhotoMetas.forEach(function (p) {
     if (!p.deleted && p.driveFileId) {
       activeDriveIdsInUse[p.driveFileId] = true;
@@ -1147,7 +1147,7 @@ function handleSyncMetadata(request, ssContext, driveContext) {
   });
 
   var driveIdsToTrash = [];
-  var driveIdsToTrashSeen = {};
+  var driveIdsToTrashSeen = Object.create(null);
   reconciledPhotoMetas.forEach(function (p) {
     if (
       p.deleted &&

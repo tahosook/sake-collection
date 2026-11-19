@@ -532,6 +532,35 @@ describe('GAS バックエンド (gas/Code.gs) 恒常テスト (M2 / M3 / M5 / D
       expect(dlRes['ok']).toBe(false);
       expect(dlRes['errorCode']).toBe('DRIVE_TEMPORARY_ERROR');
     });
+
+    it('driveFileId が "toString" の写真メタがプロトタイプ継承で有効扱いされず実在確認へ回り、不存在ならクリアされること', () => {
+      const harness = createGasTestHarness();
+      const p1Id = makePhotoUuid(1);
+      const b1 = makeBottle(1, { photoIds: [p1Id], primaryPhotoId: p1Id });
+      const p1Meta = makePhotoMeta(1, b1.id, { driveFileId: 'toString' });
+
+      const checkedDriveIds: string[] = [];
+      harness.faults.onGetDriveFileById = (fileId) => {
+        checkedDriveIds.push(fileId);
+      };
+
+      const res = harness.post<{
+        ok: boolean;
+        photoMetas: PhotoSyncMeta[];
+        photosToUpload: string[];
+      }>({
+        action: 'sync_metadata',
+        passphrase: TEST_PASSPHRASE,
+        isInitialEmptyClient: false,
+        bottles: [b1],
+        photoMetas: [p1Meta],
+      });
+
+      expect(res.ok).toBe(true);
+      expect(checkedDriveIds).toContain('toString');
+      expect(res.photoMetas[0]?.driveFileId).toBeNull();
+      expect(res.photosToUpload).toEqual([p1Id]);
+    });
   });
 
   describe('M5: スキーマ検証・未来日時ガード (+24h)・大量削除ガード', () => {
