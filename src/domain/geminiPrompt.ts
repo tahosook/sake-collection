@@ -98,7 +98,7 @@ export function buildGeminiConsultationPrompt(options: {
 - ④飲み方: ${axes.servingAxis}`;
   }
 
-  return `添付した写真（お酒の表ラベル、裏ラベル、箱など）から情報を読み取り、Web検索で裏付けを取った上で、下記のJSON形式のみを出力してください。挨拶や補足文は一切含めず、\`\`\`json\`\`\`のコードブロック1つだけを出力してください。
+  return `添付した写真（お酒の表ラベル、裏ラベル、箱など）から情報を読み取り、Web検索で裏付けを取った上で、下記のJSON形式のみを出力してください。挨拶や補足文は一切含めず、JSONのコードブロック1つだけを出力してください。
 
 【厳守する正確さの原則】
 1. ラベルの文字と、信頼できるWeb情報（公式サイト・蔵元/蒸留所・正規輸入元・酒販店等）で確実に裏付けが取れた事実のみを書いてください。
@@ -118,6 +118,20 @@ ${categoryHintText}
   "cropBox": { "ymin": 上端, "xmin": 左端, "ymax": 下端, "xmax": 右端 }
 - 写真にボトル本体が写っていない場合や1本のみの相談の場合は、"cropBox" は省略または null にしてください。
 
+【categoryAttributes（種類別の主要属性キー）】
+種類に応じた主要属性のみを含め、不明な項目はキー自体を省略するか null にしてください。
+- 日本酒: brewery（蔵元）, ricePolishingRatio（精米歩合、例: "50%"）, specificName（特定名称、例: "純米大吟醸"）
+- ワイン: grapeVarieties（品種）, region（産地）, wineType（赤/白/泡等）, vintageYear（年、西暦数値またはnull）
+- ウイスキー: distillery（蒸留所）, ageStatement（熟成年数、例: "12年"）
+- ジン: distillery（蒸留所）, botanicals（主なボタニカル）
+- 焼酎: ingredients（原材料）, brewery（蔵元）
+- ビール: beerStyle（スタイル）, brewery（醸造所）
+- ブランデー: region（産地）, grade（等級、例: "XO"）
+- シェリー: sherryType（タイプ、例: "Fino"）, bodega（ボデガ）
+- ウォッカ: ingredients（原料）, region（産地）
+- その他: 空オブジェクト {}
+※出力する JSON 内には /* */ や // などのコメントを一切含めないでください（純粋な JSON のみを出力してください）。
+
 【出力JSONフォーマット】
 \`\`\`json
 {
@@ -126,18 +140,9 @@ ${categoryHintText}
   "abv": 15.0,
   "volumeMl": 720,
   "categoryAttributes": {
-    /* 種類に応じた主要属性。不明な項目はキー自体を省略するかnullにしてください。
-     * 日本酒: brewery（蔵元）, ricePolishingRatio（精米歩合、例: "50%"）, specificName（特定名称、例: "純米大吟醸"）
-     * ワイン: grapeVarieties（品種）, region（産地）, wineType（赤/白/泡等）, vintageYear（年、西暦数値またはnull）
-     * ウイスキー: distillery（蒸留所）, ageStatement（熟成年数、例: "12年"）
-     * ジン: distillery（蒸留所）, botanicals（主なボタニカル）
-     * 焼酎: ingredients（原材料）, brewery（蔵元）
-     * ビール: beerStyle（スタイル）, brewery（醸造所）
-     * ブランデー: region（産地）, grade（等級、例: "XO"）
-     * シェリー: sherryType（タイプ、例: "Fino"）, bodega（ボデガ）
-     * ウォッカ: ingredients（原料）, region（産地）
-     * その他: （空オブジェクト）
-     */
+    "brewery": "蔵元名",
+    "ricePolishingRatio": "50%",
+    "specificName": "純米大吟醸"
   },
   "description": {
     "summary": "① ひとことで（概要と特徴、1〜2文）",

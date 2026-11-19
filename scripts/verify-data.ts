@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { SAMPLE_BOTTLES, SAMPLE_PHOTOS } from '../src/data/sampleData';
 import { SAKE_CATEGORIES, BOTTLE_STATUSES, BottleRecord } from '../src/types/sake';
@@ -329,8 +330,25 @@ function verifyNoRealPhotosOrData(): void {
     '.clasp.json',
   ]);
 
-  // スキャン除外ディレクトリ
+  // スキャン除外ディレクトリ（リポジトリルート直下の local-data/ のみ実データ置き場として許可除外）
   const ignoredDirs = new Set(['.git', 'node_modules', '.gemini']);
+
+  function isRootLocalDataDir(relativePath: string): boolean {
+    return relativePath.replace(/\\/g, '/') === 'local-data';
+  }
+
+  // local-data/ 配下が Git に追跡されていないことを検査 (D1)
+  if (fs.existsSync(path.join(projectRoot, '.git'))) {
+    const trackedLocalData = execFileSync('git', ['ls-files', '--', 'local-data'], {
+      cwd: projectRoot,
+      encoding: 'utf8',
+    }).trim();
+    if (trackedLocalData.length > 0) {
+      console.error('local-data/ 配下のファイルが Git に追跡されています（実データのコミットは禁止です）:');
+      trackedLocalData.split('\n').forEach((f) => console.error(`  - ${f}`));
+      throw new Error('[verify:data] local-data/ 配下のファイルが Git 管理対象に含まれています');
+    }
+  }
 
   const foundPhotoFiles: string[] = [];
   const foundOversizedIcons: string[] = [];
@@ -343,7 +361,7 @@ function verifyNoRealPhotosOrData(): void {
       const relativePath = path.relative(projectRoot, fullPath);
 
       if (entry.isDirectory()) {
-        if (!ignoredDirs.has(entry.name)) {
+        if (!ignoredDirs.has(entry.name) && !isRootLocalDataDir(relativePath)) {
           scan(fullPath);
         }
       } else if (entry.isFile()) {
@@ -585,8 +603,9 @@ function verifyNoSecretsOrCrossAppIdentifiers(): void {
     const entries = fs.readdirSync(currentDir, { withFileTypes: true });
     for (const entry of entries) {
       const fullPath = path.join(currentDir, entry.name);
+      const relativePath = path.relative(projectRoot, fullPath).replace(/\\/g, '/');
       if (entry.isDirectory()) {
-        if (!ignoredDirs.has(entry.name)) {
+        if (!ignoredDirs.has(entry.name) && relativePath !== 'local-data') {
           scan(fullPath);
         }
       } else if (entry.isFile()) {
