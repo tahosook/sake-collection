@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   CATEGORY_DESCRIPTION_AXES,
   buildGeminiConsultationPrompt,
+  extractJsonFromText,
   parseAndValidateGeminiJson,
   mergeGeminiPayloadIntoBottle,
   GeminiImportPayload,
@@ -63,6 +64,29 @@ describe('Gemini 相談・取り込み・ドメインロジックテスト (PR #
       const noHintPrompt = buildGeminiConsultationPrompt();
       expect(noHintPrompt).not.toContain('記述軸');
       expect(noHintPrompt).not.toContain('お酒の種類ヒント');
+    });
+
+    it('AI-2: 相談プロンプト内の見本 JSON に /* */ コメントが含まれず、そのまま JSON.parse および取り込み検証に通ること', () => {
+      const prompt = buildGeminiConsultationPrompt({
+        categoryHint: '日本酒',
+        todayDate: '2026-11-19',
+      });
+
+      const extracted = extractJsonFromText(prompt);
+      expect(extracted).not.toContain('/*');
+      expect(extracted).not.toContain('*/');
+      expect(() => JSON.parse(extracted) as unknown).not.toThrow();
+
+      const validated = parseAndValidateGeminiJson(extracted, { todayDate: '2026-11-19' });
+      expect(validated.success).toBe(true);
+      if (validated.success) {
+        expect(validated.warnings).toHaveLength(0);
+      }
+
+      // 種類別属性キー案内がコードブロック外に残っていること
+      expect(prompt).toContain('【categoryAttributes（種類別の主要属性キー）】');
+      expect(prompt).toContain('vintageYear');
+      expect(prompt).toContain('sherryType');
     });
   });
 
