@@ -9,6 +9,8 @@ import {
   PhotoCloneInstruction,
   deleteBottle as dbDeleteBottle,
   exportBackupData,
+  exportBackupBlob as dbExportBackupBlob,
+  ExportBackupBlobResult,
   importBackupData,
   loadSampleData,
   clearDatabase,
@@ -63,6 +65,9 @@ export interface UseCollectionReturn {
 
   /** バックアップデータをエクスポート */
   exportBackup: () => Promise<BackupData>;
+
+  /** バックアップデータを省メモリ Blob としてエクスポート */
+  exportBackupBlob: () => Promise<ExportBackupBlobResult>;
 
   /** バックアップ JSON を検証・復元 */
   importBackup: (raw: unknown) => Promise<ImportBackupResult>;
@@ -182,6 +187,10 @@ export function useCollection(): UseCollectionReturn {
     return exportBackupData();
   }, []);
 
+  const exportBackupBlob = useCallback(async (): Promise<ExportBackupBlobResult> => {
+    return dbExportBackupBlob();
+  }, []);
+
   const importBackup = useCallback(
     async (raw: unknown): Promise<ImportBackupResult> => {
       const res = await importBackupData(raw);
@@ -220,6 +229,7 @@ export function useCollection(): UseCollectionReturn {
     changeBottleStatus,
     deleteBottle,
     exportBackup,
+    exportBackupBlob,
     importBackup,
     resetWithSampleData,
     clearAll,

@@ -18,10 +18,13 @@ import {
   getMeta,
   setMeta,
   exportBackupData,
+  exportBackupBlob,
   importBackupData,
   loadSampleData,
   saveBottleWithPhotos,
   getPendingDeletedPhotos,
+  saveSyncDownloadCache,
+  getSyncDownloadCache,
 } from '../src/storage/db';
 import { SAMPLE_BOTTLES, SAMPLE_PHOTOS } from '../src/data/sampleData';
 import { createNewBottle } from '../src/domain/bottleUtils';
@@ -401,6 +404,164 @@ describe('storage (IndexedDB 永続化レイヤー) テスト', () => {
       const remaining = await getAllBottles(true);
       expect(remaining).toHaveLength(1);
       expect(remaining[0]?.id).toBe(initialBottle.id);
+    });
+
+    it('M4 & S6: exportBackupBlob がカーソル経由で自己検証済み JSON Blob を生成し、欠損写真参照を修復して往復復元できること', async () => {
+      const bottleId = '00000000-0000-4000-8000-000000000010';
+      const validPhotoId = '11111111-0000-4000-8000-000000000010';
+      const missingPhotoId = '11111111-0000-4000-8000-000000000099';
+
+      const bottleWithDanglingRef = createNewBottle(
+        {
+          name: '修復対象酒',
+          category: '日本酒',
+          photoIds: [validPhotoId, missingPhotoId],
+          primaryPhotoId: missingPhotoId,
+        },
+        { id: bottleId, nowIso: '2026-11-10T10:00:00.000Z' }
+      );
+      const validPhoto: PhotoRecord = {
+        id: validPhotoId,
+        bottleId,
+        mimeType: 'image/jpeg',
+        dataUrl: SAMPLE_PHOTOS[0]!.dataUrl,
+        width: 400,
+        height: 500,
+        byteSize: 144,
+        contentHash: '5b5fb70ef1caa9e30dc86acc6ace2cc51950471127e5e8f40b86e578de09da3d',
+        driveFileId: 'drive-1',
+        createdAt: '2026-11-10T10:00:00.000Z',
+        updatedAt: '2026-11-10T10:00:00.000Z',
+        deleted: false,
+      };
+      await saveBottleWithPhotos(bottleWithDanglingRef, [validPhoto]);
+
+      const exportRes = await exportBackupBlob('2026-11-19T10:00:00.000Z');
+      expect(exportRes.bottleCount).toBe(1);
+      expect(exportRes.photoCount).toBe(1);
+      expect(exportRes.repairedReferenceCount).toBe(1);
+
+      const jsonText = await exportRes.blob.text();
+      const valRes = validateBackupData(jsonText);
+      expect(valRes.success).toBe(true);
+      if (valRes.success) {
+        expect(valRes.data.bottles[0]?.photoIds).toEqual([validPhotoId]);
+        expect(valRes.data.bottles[0]?.primaryPhotoId).toBe(validPhotoId);
+        expect(valRes.data.photos).toHaveLength(1);
+      }
+
+      await clearDatabase();
+      const importRes = await importBackupData(jsonText);
+      expect(importRes.success).toBe(true);
+    });
+
+    it('M4: DB 内に不正レコードがある場合は exportBackupData / exportBackupBlob が自己検証で失敗し lastBackupAt を更新しないこと', async () => {
+      const brokenBottle = {
+        ...createNewBottle({ name: '破損レコード', category: '日本酒', status: 'unopened' }),
+        openedDate: '2026-11-01', // 未開封なのに開封日がある不正状態
+      } as BottleRecord;
+      await saveBottle(brokenBottle);
+
+      await expect(exportBackupData('2026-11-19T10:00:00.000Z')).rejects.toThrow(
+        'バックアップデータの自己検証に失敗しました'
+      );
+      await expect(exportBackupBlob('2026-11-19T10:00:00.000Z')).rejects.toThrow(
+        'バックアップデータの自己検証に失敗しました'
+      );
+      expect(await getMeta('lastBackupAt')).toBeUndefined();
+    });
+
+    it('M1: importBackupData が updatedAt 昇格・driveFileId リセット・既存外ボトルのトームストーン化・メタ整合を行うこと', async () => {
+      // 1. 復元前の端末にサンプルデータやバックアップ外ボトル（同期済み写真付き）とダウンロードキャッシュが存在する状態
+      await loadSampleData();
+      const extraBottleId = '00000000-0000-4000-8000-000000000777';
+      const extraPhotoId = '11111111-0000-4000-8000-000000000777';
+      const extraBottle = createNewBottle(
+        {
+          name: 'バックアップ後に増えた酒',
+          category: 'ウイスキー',
+          photoIds: [extraPhotoId],
+          primaryPhotoId: extraPhotoId,
+        },
+        { id: extraBottleId, nowIso: '2026-11-15T10:00:00.000Z' }
+      );
+      const extraPhoto: PhotoRecord = {
+        id: extraPhotoId,
+        bottleId: extraBottleId,
+        mimeType: 'image/jpeg',
+        dataUrl: SAMPLE_PHOTOS[0]!.dataUrl,
+        width: 400,
+        height: 500,
+        byteSize: 144,
+        contentHash: '5b5fb70ef1caa9e30dc86acc6ace2cc51950471127e5e8f40b86e578de09da3d',
+        driveFileId: 'drive-extra-777',
+        createdAt: '2026-11-15T10:00:00.000Z',
+        updatedAt: '2026-11-15T10:00:00.000Z',
+        deleted: false,
+      };
+      await saveBottleWithPhotos(extraBottle, [extraPhoto]);
+      await saveSyncDownloadCache([extraPhoto]);
+
+      // 2. 過去時点の実バックアップを作成
+      const restoredBottleId = '00000000-0000-4000-8000-000000000888';
+      const restoredPhotoId = '11111111-0000-4000-8000-000000000888';
+      const oldBackup: BackupData = {
+        schemaVersion: 1,
+        exportedAt: '2026-11-10T10:00:00.000Z',
+        bottles: [
+          createNewBottle(
+            {
+              name: '復元したい実データ酒',
+              category: '日本酒',
+              photoIds: [restoredPhotoId],
+              primaryPhotoId: restoredPhotoId,
+            },
+            { id: restoredBottleId, nowIso: '2026-11-10T10:00:00.000Z' }
+          ),
+        ],
+        photos: [
+          {
+            id: restoredPhotoId,
+            bottleId: restoredBottleId,
+            mimeType: 'image/jpeg',
+            dataUrl: SAMPLE_PHOTOS[1]!.dataUrl,
+            width: 400,
+            height: 500,
+            byteSize: 144,
+            contentHash: 'fdc97e5aeac1833c3d04b5db20c2f3ea6ff4b0cfe84f370700a5b5faf4153863',
+            driveFileId: 'drive-old-888',
+            createdAt: '2026-11-10T10:00:00.000Z',
+            updatedAt: '2026-11-10T10:00:00.000Z',
+            deleted: false,
+          },
+        ],
+      };
+
+      const importRes = await importBackupData(oldBackup, '2026-11-14T10:00:00.000Z');
+      expect(importRes.success).toBe(true);
+      if (importRes.success) {
+        // UI 表示件数はバックアップファイル内の件数
+        expect(importRes.count).toEqual({ bottles: 1, photos: 1 });
+      }
+
+      // 復元レコードの updatedAt が既存最大(2026-11-15)より新しく、driveFileId が null にリセットされること
+      const restoredBottle = await getBottle(restoredBottleId);
+      expect((restoredBottle?.updatedAt ?? '') > '2026-11-15T10:00:00.000Z').toBe(true);
+      const restoredPhoto = await getPhoto(restoredPhotoId);
+      expect(restoredPhoto?.driveFileId).toBeNull();
+      expect(restoredPhoto?.updatedAt).toBe(restoredBottle?.updatedAt);
+
+      // バックアップ外ボトルはトームストーン化され、同期済み写真は pendingDeletedPhotos に退避されること
+      const tombstonedExtra = await getBottle(extraBottleId);
+      expect(tombstonedExtra?.deleted).toBe(true);
+      expect(tombstonedExtra?.photoIds).toEqual([]);
+      const pendingDeleted = await getPendingDeletedPhotos();
+      expect(pendingDeleted.some((p) => p.id === extraPhotoId && p.deleted)).toBe(true);
+
+      // サンプルフラグ解除・キャッシュ破棄・pendingBackupRestoreAt 記録
+      expect(await getMeta('isSampleDataLoaded')).toBe(false);
+      expect(await getSyncDownloadCache()).toHaveLength(0);
+      expect(await getMeta('pendingBackupRestoreAt')).toBe(restoredBottle?.updatedAt);
     });
   });
 });

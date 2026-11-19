@@ -28,6 +28,7 @@ import {
   saveSyncDownloadCache,
   exportBackupData,
   importBackupData,
+  getMeta,
 } from '../src/storage/db';
 import { createNewBottle } from '../src/domain/bottleUtils';
 import { validateBackupData } from '../src/domain/validation';
@@ -1257,10 +1258,10 @@ describe('同期クライアントサービス統合テスト (PR #13)', () => {
       expect(syncA2.success).toBe(true);
       expect(syncA2.uploadedCount).toBe(1);
 
-      // 4. 端末B (先ほど backupB1 を持っていた状態) が再同期: 写真が自動復元されバックアップ整合も維持
+      // 4. 端末B (syncB1 時点の端末状態を復元) が再同期: 写真が自動復元されバックアップ整合も維持
       await clearDatabase();
       await saveSyncConfig(sharedConfig);
-      await importBackupData(backupB1);
+      await saveBottleWithPhotos(bottleOnB1!, []);
 
       const syncB2 = await executeFullSync({ config: sharedConfig });
       expect(syncB2.success).toBe(true);
@@ -1322,6 +1323,110 @@ describe('同期クライアントサービス統合テスト (PR #13)', () => {
       await expect(executeFullSync()).rejects.toThrow(
         '他の同期処理が実行中のためタイムアウトしました'
       );
+    });
+
+    it('M1 + D3: バックアップ復元後、クラウド側の新しい版や削除記録に巻き戻らず復元内容が優先反映され、クロックスキューも補正されること', async () => {
+      const gasPassphrase = 'm1-restore-test-passphrase-32chars';
+      const harness = createGasTestHarness({
+        passphrase: gasPassphrase,
+        nowIso: '2026-11-19T12:00:00.000Z',
+      });
+      const sharedConfig: SyncConnectionConfig = {
+        gasUrl: 'https://mock-gas.local/sync',
+        passphrase: gasPassphrase,
+        source: 'manual',
+        updatedAt: '2026-11-19T09:00:00.000Z',
+      };
+
+      globalThis.fetch = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+        const payload = JSON.parse(init?.body as string) as unknown;
+        const gasRes = harness.post(payload);
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => gasRes,
+        } as Response);
+      });
+
+      const b1Id = '00000000-0000-4000-8000-000000000101';
+      const b2Id = '00000000-0000-4000-8000-000000000102';
+      const p1Id = '11111111-0000-4000-8000-000000000101';
+
+      // 1. 初期状態: b1(写真付き) と b2 を同期し、バックアップを取得
+      const tInitial = '2026-11-18T10:00:00.000Z';
+      const b1 = createTestBottle({
+        id: b1Id,
+        name: '復元したい銘柄A',
+        photoIds: [p1Id],
+        primaryPhotoId: p1Id,
+        createdAt: tInitial,
+        updatedAt: tInitial,
+      });
+      const p1 = createTestPhotoRecord({
+        id: p1Id,
+        bottleId: b1Id,
+        driveFileId: null,
+        createdAt: tInitial,
+        updatedAt: tInitial,
+      });
+      const b2 = createTestBottle({
+        id: b2Id,
+        name: '復元したい銘柄B',
+        createdAt: tInitial,
+        updatedAt: tInitial,
+      });
+
+      await saveSyncConfig(sharedConfig);
+      await saveBottleWithPhotos(b1, [p1]);
+      await saveBottleWithPhotos(b2, []);
+      await executeFullSync({ config: sharedConfig });
+
+      const backupBeforeMistake = await exportBackupData('2026-11-18T10:05:00.000Z');
+
+      // 2. その後クラウド側で誤編集・削除が発生（時計がサーバー時刻 12:00:00 付近まで進んだ状態）
+      const tCloudLater = '2026-11-19T11:50:00.000Z';
+      await saveBottleWithPhotos(
+        createTestBottle({
+          id: b1Id,
+          name: '誤って上書きされた銘柄A',
+          photoIds: [],
+          primaryPhotoId: null,
+          createdAt: tInitial,
+          updatedAt: tCloudLater,
+        }),
+        []
+      );
+      await deleteBottle(b2Id, tCloudLater);
+      await executeFullSync({ config: sharedConfig });
+
+      // 3. 端末時計がサーバー時刻(12:00:00)より遅れている別端末(10:00:00)でバックアップを復元する模擬
+      await clearDatabase();
+      await saveSyncConfig(sharedConfig);
+      const importRes = await importBackupData(backupBeforeMistake, '2026-11-19T10:00:00.000Z');
+      expect(importRes.success).toBe(true);
+      expect(await getMeta<string>('pendingBackupRestoreAt')).toBeDefined();
+
+      // 4. 復元直後に同期: ping.serverTime によるクロックスキュー補正で 12:00:01 へ昇格し、
+      //    クラウド側の誤編集・削除記録に勝って復元内容と写真が復旧すること
+      const syncAfterRestore = await executeFullSync({ config: sharedConfig });
+      expect(syncAfterRestore.success).toBe(true);
+
+      const restoredB1 = await getBottle(b1Id);
+      const restoredB2 = await getBottle(b2Id);
+      expect(restoredB1?.name).toBe('復元したい銘柄A');
+      expect(restoredB1?.photoIds).toEqual([p1Id]);
+      expect(restoredB2?.deleted).toBe(false);
+      expect(restoredB2?.name).toBe('復元したい銘柄B');
+      expect(await getPhoto(p1Id)).toBeDefined();
+      expect(await getMeta('pendingBackupRestoreAt')).toBeUndefined();
+
+      // サーバー側(GAS)にも復元内容が勝者として保存されていること
+      const pingAfter = harness.post<{ ok: boolean; counts: { bottlesActive: number } }>({
+        action: 'ping',
+        passphrase: gasPassphrase,
+      });
+      expect(pingAfter.ok).toBe(true);
+      expect(pingAfter.counts.bottlesActive).toBe(2);
     });
   });
 });
