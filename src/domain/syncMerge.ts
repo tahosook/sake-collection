@@ -165,6 +165,8 @@ export interface ReconcilePhotosResult {
   photosToUpload: string[];
   /** Drive からのダウンロードが必要な写真 ID リスト */
   photosToDownload: string[];
+  /** 有効だがローカルに画像がなく、リモートにも driveFileId が未確定のため取得できない写真 ID リスト (M4) */
+  missingRemotePhotoIds: string[];
   /** contentHash 重複排除により driveFileId が解決された写真マッピング (photoId -> driveFileId) */
   deduplicatedDriveFileIds: Record<string, string>;
   /** ローカル IndexedDB photos ストアから物理削除すべき写真 ID リスト (孤立・不要データ) */
@@ -308,9 +310,10 @@ export function reconcilePhotosWithBottles(options: ReconcilePhotosOptions): Rec
 
   reconciledPhotoMetas.sort((a, b) => a.id.localeCompare(b.id));
 
-  // 5. アップロード・ダウンロード・ローカル保持/削除の振り分け
+  // 5. アップロード・ダウンロード・欠損・ローカル保持/削除の振り分け
   const photosToUpload: string[] = [];
   const photosToDownload: string[] = [];
+  const missingRemotePhotoIds: string[] = [];
   const photosToPurgeFromLocal: string[] = [];
   const localPhotoIdsToKeep: string[] = [];
 
@@ -327,9 +330,13 @@ export function reconcilePhotosWithBottles(options: ReconcilePhotosOptions): Rec
           photosToUpload.push(meta.id);
         }
       } else {
-        // ローカルにない場合は Drive からダウンロード対象（driveFileId がある場合）
+        // ローカルにない場合
         if (meta.driveFileId) {
+          // Drive からダウンロード対象
           photosToDownload.push(meta.id);
+        } else {
+          // 他端末からのアップロード未完了等により driveFileId が未確定 (M4)
+          missingRemotePhotoIds.push(meta.id);
         }
       }
     } else {
@@ -353,6 +360,7 @@ export function reconcilePhotosWithBottles(options: ReconcilePhotosOptions): Rec
     reconciledPhotoMetas,
     photosToUpload: photosToUpload.sort(),
     photosToDownload: photosToDownload.sort(),
+    missingRemotePhotoIds: missingRemotePhotoIds.sort(),
     deduplicatedDriveFileIds,
     photosToPurgeFromLocal: photosToPurgeFromLocal.sort(),
     localPhotoIdsToKeep: localPhotoIdsToKeep.sort(),

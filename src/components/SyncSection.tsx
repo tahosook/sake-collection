@@ -101,9 +101,19 @@ export const SyncSection: React.FC<SyncSectionProps> = ({
       });
 
       setLastSyncAt(res.syncedAt);
+      const notes: string[] = [];
+      if (res.hasPendingLocalChanges) {
+        notes.push(
+          '※ 同期中に行われた変更を端末内に保護しました。クラウドへ反映するにはもう一度「今すぐ同期」を押してください。'
+        );
+      }
+      if (res.warnings && res.warnings.length > 0) {
+        notes.push(...res.warnings);
+      }
+      const baseText = `同期が完了しました（送信: ${res.uploadedCount}枚、受信: ${res.downloadedCount}枚）。`;
       setBannerMessage({
         type: 'success',
-        text: `同期が完了しました（送信: ${res.uploadedCount}枚、受信: ${res.downloadedCount}枚）。`,
+        text: notes.length > 0 ? `${baseText}\n${notes.join('\n')}` : baseText,
       });
 
       if (onSyncComplete) {
@@ -115,6 +125,16 @@ export const SyncSection: React.FC<SyncSectionProps> = ({
         text: `同期に失敗しました: ${err instanceof Error ? err.message : String(err)}`,
       });
     } finally {
+      try {
+        const latestConfig = await getSyncConfig();
+        if (latestConfig && latestConfig.updatedAt !== config?.updatedAt) {
+          setConfig(latestConfig);
+          setGasUrlInput(latestConfig.gasUrl);
+          setPassphraseInput(latestConfig.passphrase);
+        }
+      } catch {
+        // 設定再読込失敗時は既存表示を維持
+      }
       setIsSyncing(false);
       setProgress(null);
     }
