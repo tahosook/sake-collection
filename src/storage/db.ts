@@ -10,7 +10,7 @@ import {
 } from '../types/sake';
 import { SAMPLE_BOTTLES, SAMPLE_PHOTOS } from '../data/sampleData';
 import { validateBackupData } from '../domain/validation';
-import { toPhotoSyncMeta } from '../domain/syncMerge';
+import { mergeBottleRecords, sanitizeDeletedBottle, toPhotoSyncMeta } from '../domain/syncMerge';
 
 export const DB_NAME = 'sake-collection-db';
 export const DB_VERSION = 1;
@@ -536,78 +536,176 @@ export interface CommitSyncResultInput {
   photosToUpsert?: PhotoRecord[];
   /** 確定した同期完了日時 (ISO 8601 UTC) */
   syncedAtIso: string;
+  /** 同期開始時のローカルボトル updatedAt スナップショット (S2: 同期中編集の保護用) */
+  snapshotBottleUpdatedAt?: Record<string, string>;
+  /** 同期開始時にサーバーへ送信済みだった pendingDeletedPhotos スナップショット (S2) */
+  sentPendingDeletedPhotos?: Array<{ id: string; updatedAt: string }>;
+}
+
+export interface CommitSyncResultOutput {
+  /** 同期中にローカルで発生した変更を保護したため、再同期が推奨されるかどうか */
+  hasPendingLocalChanges: boolean;
 }
 
 /**
  * 同期結果を単一トランザクションで IndexedDB にアトミック反映する
  */
-export async function commitSyncResultToDb(input: CommitSyncResultInput): Promise<void> {
-  const { bottles, photosToPurge = [], photosToUpsert = [], syncedAtIso } = input;
+export async function commitSyncResultToDb(input: CommitSyncResultInput): Promise<CommitSyncResultOutput> {
+  const {
+    bottles,
+    photosToPurge = [],
+    photosToUpsert = [],
+    syncedAtIso,
+    snapshotBottleUpdatedAt,
+    sentPendingDeletedPhotos,
+  } = input;
   const db = await getDb();
   const tx = db.transaction(['bottles', 'photos', 'meta'], 'readwrite');
   const bottleStore = tx.objectStore('bottles');
   const photoStore = tx.objectStore('photos');
   const metaStore = tx.objectStore('meta');
 
-  const purgeSet = new Set(photosToPurge);
+  const existingBottles = await bottleStore.getAll();
+  const existingBottleMap = new Map<string, BottleRecord>(existingBottles.map((b) => [b.id, b]));
+  const existingPhotos = await photoStore.getAll();
+  const effectivePhotoIds = new Set<string>(existingPhotos.map((p) => p.id));
 
-  // 1. ボトル全件 put
-  // deleted === true のボトルは photoIds: [] と primaryPhotoId: null に正規化して保存
-  // 有効なボトルでも万一 photosToPurge に含まれる写真 ID があれば除外
+  let hasPendingLocalChanges = false;
+  const finalBottleMap = new Map<string, BottleRecord>();
+
+  // 1. リモートボトルと同期中ローカル編集の競合解決 (S2)
   for (const b of bottles) {
-    if (b.deleted) {
-      await bottleStore.put({
-        ...b,
-        photoIds: [],
-        primaryPhotoId: null,
-      });
-    } else {
-      const hasPurgedPhotos = b.photoIds.some((pid) => purgeSet.has(pid));
-      if (hasPurgedPhotos) {
-        const cleanedPhotoIds = b.photoIds.filter((pid) => !purgeSet.has(pid));
-        const cleanedPrimary =
-          b.primaryPhotoId && cleanedPhotoIds.includes(b.primaryPhotoId)
-            ? b.primaryPhotoId
-            : cleanedPhotoIds[0] ?? null;
-        await bottleStore.put({
-          ...b,
-          photoIds: cleanedPhotoIds,
-          primaryPhotoId: cleanedPrimary,
-        });
-      } else {
-        await bottleStore.put(b);
+    const sanitizedRemote = sanitizeDeletedBottle(b);
+    const existingLocal = existingBottleMap.get(b.id);
+
+    if (snapshotBottleUpdatedAt !== undefined && existingLocal !== undefined) {
+      const wasInSnapshot = Object.prototype.hasOwnProperty.call(snapshotBottleUpdatedAt, b.id);
+      const snapshotUpdatedAt = wasInSnapshot ? snapshotBottleUpdatedAt[b.id] : undefined;
+      const modifiedLocallyDuringSync = !wasInSnapshot || existingLocal.updatedAt !== snapshotUpdatedAt;
+
+      if (modifiedLocallyDuringSync) {
+        const merged = mergeBottleRecords(existingLocal, sanitizedRemote);
+        if (merged.updatedAt !== sanitizedRemote.updatedAt || merged.deleted !== sanitizedRemote.deleted) {
+          hasPendingLocalChanges = true;
+        }
+        finalBottleMap.set(b.id, merged);
+        continue;
+      }
+    }
+
+    finalBottleMap.set(b.id, sanitizedRemote);
+  }
+
+  // 同期中にローカルで新規作成（または変更）されたがリモート結果に含まれないボトルを保護 (S2)
+  if (snapshotBottleUpdatedAt !== undefined) {
+    for (const [localId, existingLocal] of existingBottleMap.entries()) {
+      if (!finalBottleMap.has(localId)) {
+        const wasInSnapshot = Object.prototype.hasOwnProperty.call(snapshotBottleUpdatedAt, localId);
+        const snapshotUpdatedAt = wasInSnapshot ? snapshotBottleUpdatedAt[localId] : undefined;
+        if (!wasInSnapshot || existingLocal.updatedAt !== snapshotUpdatedAt) {
+          finalBottleMap.set(localId, sanitizeDeletedBottle(existingLocal));
+          hasPendingLocalChanges = true;
+        }
       }
     }
   }
 
-  // 2. 孤立・削除済み写真の物理削除
+  // 最終的に有効なボトルが参照している写真 ID 集合
+  const activeReferencedPhotoIds = new Set<string>();
+  for (const fb of finalBottleMap.values()) {
+    if (!fb.deleted) {
+      for (const pid of fb.photoIds) {
+        activeReferencedPhotoIds.add(pid);
+      }
+    }
+  }
+
+  // 2. 孤立・削除済み写真の物理削除 (保護された同期中ローカル変更が参照している写真は削除しない)
   for (const pid of photosToPurge) {
-    await photoStore.delete(pid);
+    if (!activeReferencedPhotoIds.has(pid)) {
+      await photoStore.delete(pid);
+      effectivePhotoIds.delete(pid);
+    }
   }
 
-  // 3. 新規ダウンロード・更新写真の保存
+  // 3. 新規ダウンロード・更新写真の保存 (同期中に親ボトルが削除された場合は保存しない)
   for (const p of photosToUpsert) {
-    await photoStore.put(p);
+    const parentBottle = finalBottleMap.get(p.bottleId);
+    if (parentBottle && !parentBottle.deleted && parentBottle.photoIds.includes(p.id)) {
+      await photoStore.put(p);
+      effectivePhotoIds.add(p.id);
+    } else if (effectivePhotoIds.has(p.id)) {
+      await photoStore.delete(p.id);
+      effectivePhotoIds.delete(p.id);
+    }
   }
 
-  // 4. pendingDeletedPhotos のクリア
-  await metaStore.put({
-    key: 'pendingDeletedPhotos',
-    value: [],
-    updatedAt: syncedAtIso,
-  });
+  // 4. ボトル全件 put (M4: ローカル photos ストアに実体が存在しない参照を除外して双方向整合を保持。updatedAt は維持)
+  for (const fb of finalBottleMap.values()) {
+    if (fb.deleted) {
+      await bottleStore.put({
+        ...fb,
+        photoIds: [],
+        primaryPhotoId: null,
+      });
+    } else {
+      const cleanedPhotoIds = fb.photoIds.filter((pid) => effectivePhotoIds.has(pid));
+      const cleanedPrimary =
+        fb.primaryPhotoId && cleanedPhotoIds.includes(fb.primaryPhotoId)
+          ? fb.primaryPhotoId
+          : cleanedPhotoIds[0] ?? null;
+      if (cleanedPhotoIds.length !== fb.photoIds.length || cleanedPrimary !== fb.primaryPhotoId) {
+        await bottleStore.put({
+          ...fb,
+          photoIds: cleanedPhotoIds,
+          primaryPhotoId: cleanedPrimary,
+        });
+      } else {
+        await bottleStore.put(fb);
+      }
+    }
+  }
 
-  // 5. lastSyncAt の更新
+  // 5. pendingDeletedPhotos の差分クリア (S2: 同期中に新しく追加された削除予定は残す)
+  if (sentPendingDeletedPhotos !== undefined) {
+    const sentMap = new Map<string, string>(sentPendingDeletedPhotos.map((item) => [item.id, item.updatedAt]));
+    const existingMetaRecord = await metaStore.get('pendingDeletedPhotos');
+    const currentPending = Array.isArray(existingMetaRecord?.value)
+      ? (existingMetaRecord.value as PhotoSyncMeta[])
+      : [];
+    const remainingPending = currentPending.filter((item) => {
+      const sentAt = sentMap.get(item.id);
+      return sentAt === undefined || item.updatedAt > sentAt;
+    });
+    if (remainingPending.length > 0) {
+      hasPendingLocalChanges = true;
+    }
+    await metaStore.put({
+      key: 'pendingDeletedPhotos',
+      value: remainingPending,
+      updatedAt: syncedAtIso,
+    });
+  } else {
+    await metaStore.put({
+      key: 'pendingDeletedPhotos',
+      value: [],
+      updatedAt: syncedAtIso,
+    });
+  }
+
+  // 6. lastSyncAt の更新
   await metaStore.put({
     key: 'lastSyncAt',
     value: syncedAtIso,
     updatedAt: syncedAtIso,
   });
 
-  // 6. 一時ダウンロードキャッシュがあれば削除
+  // 7. 一時ダウンロードキャッシュがあれば削除
   await metaStore.delete('syncDownloadCache');
 
   await tx.done;
+
+  return { hasPendingLocalChanges };
 }
 
 /**

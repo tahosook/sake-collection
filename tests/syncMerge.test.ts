@@ -726,5 +726,87 @@ describe('同期マージ純粋ドメインロジック (PR #11)', () => {
       expect(backup.bottles).toHaveLength(1);
       expect(backup.photos).toHaveLength(2);
     });
+
+    it('M4: リモートで driveFileId が null の未アップロード写真を受信した際、missingRemotePhotoIds に分類されること', () => {
+      const b1Id = '00000000-0000-4000-8000-000000000001';
+      const pMissingId = '11111111-0000-4000-8000-000000000009';
+      const b1 = createTestBottle({ id: b1Id, photoIds: [pMissingId], primaryPhotoId: pMissingId });
+      const pMissingMeta = createTestPhotoMeta({
+        id: pMissingId,
+        bottleId: b1Id,
+        driveFileId: null,
+      });
+
+      const res = reconcilePhotosWithBottles({
+        mergedBottles: [b1],
+        localPhotos: [],
+        remotePhotoMetas: [pMissingMeta],
+      });
+
+      expect(res.missingRemotePhotoIds).toEqual([pMissingId]);
+      expect(res.photosToDownload).toEqual([]);
+      expect(res.photosToUpload).toEqual([]);
+    });
+
+    it('S2: commitSyncResultToDb は同期中にローカルで編集・新規追加・削除予約された変更を上書きせず hasPendingLocalChanges を返すこと', async () => {
+      const b1Id = '00000000-0000-4000-8000-000000000001';
+      const bNewId = '00000000-0000-4000-8000-000000000002';
+      const pRemovedId = '11111111-0000-4000-8000-000000000001';
+      const initialTime = '2026-11-09T10:00:00.000Z';
+      const concurrentTime = '2026-11-09T12:00:00.000Z';
+
+      const b1Initial = createTestBottle({
+        id: b1Id,
+        name: '初期酒',
+        photoIds: [pRemovedId],
+        primaryPhotoId: pRemovedId,
+        updatedAt: initialTime,
+      });
+      const p1 = createTestPhotoRecord({
+        id: pRemovedId,
+        bottleId: b1Id,
+        driveFileId: 'drive-1',
+        updatedAt: initialTime,
+      });
+      await saveBottleWithPhotos(b1Initial, [p1]);
+
+      // 同期開始時のスナップショットを模倣
+      const snapshotBottleUpdatedAt = { [b1Id]: initialTime };
+      const sentPendingDeletedPhotos: Array<{ id: string; updatedAt: string }> = [];
+
+      // 同期中にローカルで b1 の写真を外し名前を変更し、さらに新規ボトル bNew を追加
+      const b1ConcurrentEdit = createTestBottle({
+        id: b1Id,
+        name: '同期中に編集した酒',
+        photoIds: [],
+        primaryPhotoId: null,
+        updatedAt: concurrentTime,
+      });
+      await saveBottleWithPhotos(b1ConcurrentEdit, []);
+
+      const bNewConcurrent = createTestBottle({
+        id: bNewId,
+        name: '同期中に追加した酒',
+        updatedAt: concurrentTime,
+      });
+      await saveBottleWithPhotos(bNewConcurrent, []);
+
+      // Phase 4: 古いリモート状態（initialTime）を書き戻そうとする
+      const commitResult = await commitSyncResultToDb({
+        bottles: [b1Initial],
+        photosToPurge: [],
+        photosToUpsert: [],
+        syncedAtIso: '2026-11-09T11:00:00.000Z',
+        snapshotBottleUpdatedAt,
+        sentPendingDeletedPhotos,
+      });
+
+      expect(commitResult.hasPendingLocalChanges).toBe(true);
+      expect((await getBottle(b1Id))?.name).toBe('同期中に編集した酒');
+      expect((await getBottle(bNewId))?.name).toBe('同期中に追加した酒');
+      const remainingPending = await getPendingDeletedPhotos();
+      expect(remainingPending).toHaveLength(1);
+      expect(remainingPending[0]?.id).toBe(pRemovedId);
+    });
   });
 });

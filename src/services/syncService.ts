@@ -1,11 +1,12 @@
 /**
  * sake-collection 同期クライアントサービス (Sync Orchestrator)
  *
- * 設計: docs/step3-4-design.md §3, §4
+ * 設計: docs/step3-4-design.md §3, §4 / docs/audit-fixes-design.md (S1, S2, M4)
  * 役割:
  * - /api/sync-config からの接続設定自動取得とローカル meta ストア保存
  * - GAS バックエンドとの通信 (ping / sync_metadata / upload_photo / download_photos)
  * - サンプルデータ混入防止ガードと空端末保護
+ * - 二重同期の排他制御・UNAUTHORIZED 時 1回自動設定再取得・同期中編集保護
  * - 4フェーズ同期の順次実行:
  *   Phase 1: メタデータ LWW マージ・写真双方向正規化
  *   Phase 2: 写真分割アップロード (1枚ずつ、driveFileId 即時保存によるレジューム)
@@ -84,7 +85,15 @@ export interface SyncResult {
   syncedAt: string;
   uploadedCount: number;
   downloadedCount: number;
+  hasPendingLocalChanges?: boolean;
+  warnings?: string[];
   error?: string;
+}
+
+export interface GasErrorLike {
+  message?: string;
+  error?: string;
+  errorCode?: string;
 }
 
 export const OFFLINE_SYNC_ERROR_MESSAGE =
@@ -93,6 +102,29 @@ export const OFFLINE_CONFIG_ERROR_MESSAGE =
   'オフラインまたは通信エラーのため、サーバーから同期設定を取得できませんでした。通信環境を確認してください。';
 export const OFFLINE_PING_ERROR_MESSAGE =
   'オフラインまたは通信エラーのため、サーバーに接続できませんでした。通信環境を確認してください。';
+export const SYNC_IN_PROGRESS_ERROR_MESSAGE =
+  '現在別の同期処理が実行中です。完了までお待ちください。';
+
+let isSyncInFlight = false;
+
+/**
+ * GAS レスポンスのエラーメッセージ抽出 (message 欄優先、error 欄フォールバック)
+ */
+export function extractGasErrorMessage(
+  res: GasErrorLike | null | undefined,
+  fallback: string
+): string {
+  if (!res) {
+    return fallback;
+  }
+  if (typeof res.message === 'string' && res.message.trim().length > 0) {
+    return res.message;
+  }
+  if (typeof res.error === 'string' && res.error.trim().length > 0) {
+    return res.error;
+  }
+  return fallback;
+}
 
 /**
  * オフライン状態または fetch のネットワーク通信エラーであるかを判定する
@@ -228,7 +260,7 @@ export async function testSyncConnection(config: SyncConnectionConfig): Promise<
     if (!res.ok) {
       return {
         success: false,
-        error: res.message || res.error || '認証に失敗しました（合言葉が違います）',
+        error: extractGasErrorMessage(res, '認証に失敗しました（合言葉が違います）'),
       };
     }
 
@@ -263,9 +295,21 @@ export interface ExecuteFullSyncOptions {
 }
 
 /**
- * 4フェーズ同期のフル実行オーケストレーター
+ * 4フェーズ同期のフル実行オーケストレーター (二重実行排他付き)
  */
 export async function executeFullSync(options: ExecuteFullSyncOptions = {}): Promise<SyncResult> {
+  if (isSyncInFlight) {
+    throw new Error(SYNC_IN_PROGRESS_ERROR_MESSAGE);
+  }
+  isSyncInFlight = true;
+  try {
+    return await executeFullSyncInternal(options);
+  } finally {
+    isSyncInFlight = false;
+  }
+}
+
+async function executeFullSyncInternal(options: ExecuteFullSyncOptions): Promise<SyncResult> {
   const { onProgress } = options;
 
   const notify = (step: SyncStep, message: string, current?: number, total?: number) => {
@@ -296,7 +340,9 @@ export async function executeFullSync(options: ExecuteFullSyncOptions = {}): Pro
     throw new Error(errMsg);
   }
 
-  const resolvedConfig = config;
+  let resolvedConfig = config;
+  let hasRetriedAutoConfig = false;
+
   const runGasStep = async <TRequest, TResponse>(payload: TRequest): Promise<TResponse> => {
     try {
       return await postToGas<TRequest, TResponse>(resolvedConfig.gasUrl, payload);
@@ -308,7 +354,44 @@ export async function executeFullSync(options: ExecuteFullSyncOptions = {}): Pro
     }
   };
 
-  // 2. ガード検証 (サンプルデータガード・空端末判定)
+  const runGasWithAutoReauth = async <
+    TRequest extends { passphrase: string },
+    TResponse extends { ok: boolean } & GasErrorLike,
+  >(
+    buildPayload: (passphrase: string) => TRequest
+  ): Promise<TResponse> => {
+    const firstRes = await runGasStep<TRequest, TResponse>(buildPayload(resolvedConfig.passphrase));
+    if (
+      !firstRes.ok &&
+      firstRes.errorCode === 'UNAUTHORIZED' &&
+      resolvedConfig.source === 'auto' &&
+      !hasRetriedAutoConfig
+    ) {
+      hasRetriedAutoConfig = true;
+      const autoRes = await fetchAutoSyncConfig();
+      if (autoRes.isNetworkError) {
+        notify('error', OFFLINE_SYNC_ERROR_MESSAGE);
+        throw new Error(OFFLINE_SYNC_ERROR_MESSAGE);
+      }
+      if (!autoRes.success) {
+        const errMsg = `${extractGasErrorMessage(firstRes, '認証に失敗しました（合言葉が正しくありません）')}（設定自動再取得失敗: ${autoRes.error ?? '不明なエラー'}）`;
+        notify('error', errMsg);
+        throw new Error(errMsg);
+      }
+      if (autoRes.config) {
+        const changed =
+          autoRes.config.passphrase !== resolvedConfig.passphrase ||
+          autoRes.config.gasUrl !== resolvedConfig.gasUrl;
+        if (changed) {
+          resolvedConfig = autoRes.config;
+          return runGasStep<TRequest, TResponse>(buildPayload(resolvedConfig.passphrase));
+        }
+      }
+    }
+    return firstRes;
+  };
+
+  // 2. ガード検証 (サンプルデータガード・空端末判定・開始時スナップショット)
   notify('checking_guards', 'ローカルデータの状態を確認中...');
   const allBottles = await getAllBottles(true); // 論理削除含む全件
   const allPhotos = await getAllPhotos();
@@ -323,25 +406,34 @@ export async function executeFullSync(options: ExecuteFullSyncOptions = {}): Pro
   const pendingDeletedPhotos = await getPendingDeletedPhotos();
   const isInitialEmptyClient = allBottles.length === 0 && pendingDeletedPhotos.length === 0;
 
+  const snapshotBottleUpdatedAt: Record<string, string> = {};
+  for (const b of allBottles) {
+    snapshotBottleUpdatedAt[b.id] = b.updatedAt;
+  }
+  const sentPendingDeletedPhotos = pendingDeletedPhotos.map((p) => ({
+    id: p.id,
+    updatedAt: p.updatedAt,
+  }));
+
   // ----------------------------------------------------
   // Phase 1: メタデータ同期 (sync_metadata)
   // ----------------------------------------------------
   notify('phase1_metadata', 'ボトル情報を同期中...');
   const localPhotoMetas: PhotoSyncMeta[] = allPhotos.map(toPhotoSyncMeta);
 
-  const metaRequest: SyncMetadataRequest = {
-    action: 'sync_metadata',
-    passphrase: config.passphrase,
-    isInitialEmptyClient,
-    bottles: allBottles,
-    photoMetas: localPhotoMetas,
-    pendingDeletedPhotos,
-  };
-
-  const metaResponse = await runGasStep<SyncMetadataRequest, SyncMetadataResponse>(metaRequest);
+  const metaResponse = await runGasWithAutoReauth<SyncMetadataRequest, SyncMetadataResponse>(
+    (passphrase) => ({
+      action: 'sync_metadata',
+      passphrase,
+      isInitialEmptyClient,
+      bottles: allBottles,
+      photoMetas: localPhotoMetas,
+      pendingDeletedPhotos,
+    })
+  );
 
   if (!metaResponse.ok) {
-    const errMsg = metaResponse.error || 'メタデータの同期に失敗しました';
+    const errMsg = extractGasErrorMessage(metaResponse, 'メタデータの同期に失敗しました');
     notify('error', errMsg);
     throw new Error(errMsg);
   }
@@ -362,7 +454,16 @@ export async function executeFullSync(options: ExecuteFullSyncOptions = {}): Pro
   // ----------------------------------------------------
   // Phase 2: 写真分割アップロード (1枚ずつ)
   // ----------------------------------------------------
-  const photosToUpload = reconciled.photosToUpload;
+  const serverRequestedUploadIds = new Set<string>(metaResponse.photosToUpload ?? []);
+  const localDataUrlPhotoIds = new Set<string>(
+    allPhotos.filter((p) => Boolean(p.dataUrl && p.dataUrl.length > 0)).map((p) => p.id)
+  );
+  const photosToUpload = Array.from(
+    new Set([
+      ...reconciled.photosToUpload,
+      ...Array.from(serverRequestedUploadIds).filter((id) => localDataUrlPhotoIds.has(id)),
+    ])
+  ).sort();
   let uploadedCount = 0;
 
   if (photosToUpload.length > 0) {
@@ -377,21 +478,21 @@ export async function executeFullSync(options: ExecuteFullSyncOptions = {}): Pro
         continue;
       }
 
-      // 重複排除等で既に driveFileId が確定している場合はアップロード不要
-      if (photoRecord.driveFileId) {
+      // 重複排除等で既に driveFileId が確定している場合はアップロード不要 (サーバー要求時は再アップロード)
+      if (photoRecord.driveFileId && !serverRequestedUploadIds.has(pid)) {
         continue;
       }
 
-      const uploadReq: UploadPhotoRequest = {
-        action: 'upload_photo',
-        passphrase: config.passphrase,
-        photo: photoRecord,
-      };
-
-      const uploadRes = await runGasStep<UploadPhotoRequest, UploadPhotoResponse>(uploadReq);
+      const uploadRes = await runGasWithAutoReauth<UploadPhotoRequest, UploadPhotoResponse>(
+        (passphrase) => ({
+          action: 'upload_photo',
+          passphrase,
+          photo: photoRecord,
+        })
+      );
 
       if (!uploadRes.ok || !uploadRes.driveFileId) {
-        const errMsg = uploadRes.error || `写真 (${pid}) のアップロードに失敗しました`;
+        const errMsg = extractGasErrorMessage(uploadRes, `写真 (${pid}) のアップロードに失敗しました`);
         notify('error', errMsg);
         throw new Error(errMsg);
       }
@@ -467,18 +568,16 @@ export async function executeFullSync(options: ExecuteFullSyncOptions = {}): Pro
     for (let i = 0; i < pendingDownloadIds.length; i += CHUNK_SIZE) {
       const chunkIds = pendingDownloadIds.slice(i, i + CHUNK_SIZE);
 
-      const downloadReq: DownloadPhotosRequest = {
-        action: 'download_photos',
-        passphrase: config.passphrase,
-        photoIds: chunkIds,
-      };
-
-      const downloadRes = await runGasStep<DownloadPhotosRequest, DownloadPhotosResponse>(
-        downloadReq
+      const downloadRes = await runGasWithAutoReauth<DownloadPhotosRequest, DownloadPhotosResponse>(
+        (passphrase) => ({
+          action: 'download_photos',
+          passphrase,
+          photoIds: chunkIds,
+        })
       );
 
       if (!downloadRes.ok || !Array.isArray(downloadRes.photos)) {
-        const errMsg = downloadRes.error || '写真のダウンロードに失敗しました';
+        const errMsg = extractGasErrorMessage(downloadRes, '写真のダウンロードに失敗しました');
         notify('error', errMsg);
         throw new Error(errMsg);
       }
@@ -526,13 +625,21 @@ export async function executeFullSync(options: ExecuteFullSyncOptions = {}): Pro
     finalPhotosToUpsert.push(photo);
   }
 
-
-  await commitSyncResultToDb({
+  const commitOut = await commitSyncResultToDb({
     bottles: metaResponse.bottles,
     photosToPurge: reconciled.photosToPurgeFromLocal,
     photosToUpsert: finalPhotosToUpsert,
     syncedAtIso: metaResponse.syncedAt,
+    snapshotBottleUpdatedAt,
+    sentPendingDeletedPhotos,
   });
+
+  const warnings: string[] = [];
+  if (reconciled.missingRemotePhotoIds.length > 0) {
+    warnings.push(
+      `他端末で送信未完了の写真が ${reconciled.missingRemotePhotoIds.length}枚あったため、該当写真を除いて同期しました。元の端末で再度同期すると写真が反映されます。`
+    );
+  }
 
   notify('completed', '同期が完了しました');
 
@@ -541,5 +648,7 @@ export async function executeFullSync(options: ExecuteFullSyncOptions = {}): Pro
     syncedAt: metaResponse.syncedAt,
     uploadedCount,
     downloadedCount,
+    hasPendingLocalChanges: commitOut.hasPendingLocalChanges,
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }

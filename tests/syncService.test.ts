@@ -4,10 +4,12 @@ import {
   fetchAutoSyncConfig,
   testSyncConnection,
   executeFullSync,
+  extractGasErrorMessage,
   SyncProgress,
   OFFLINE_SYNC_ERROR_MESSAGE,
   OFFLINE_CONFIG_ERROR_MESSAGE,
   OFFLINE_PING_ERROR_MESSAGE,
+  SYNC_IN_PROGRESS_ERROR_MESSAGE,
 } from '../src/services/syncService';
 import {
   closeDb,
@@ -31,6 +33,7 @@ import { createNewBottle } from '../src/domain/bottleUtils';
 import { validateBackupData } from '../src/domain/validation';
 import { BottleRecord, PhotoRecord, SyncConnectionConfig } from '../src/types/sake';
 import { SAMPLE_PHOTOS } from '../src/data/sampleData';
+import { createGasTestHarness } from './helpers/gasTestHarness';
 
 describe('同期クライアントサービス統合テスト (PR #13)', () => {
   const originalFetch = globalThis.fetch;
@@ -941,6 +944,384 @@ describe('同期クライアントサービス統合テスト (PR #13)', () => {
       globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
 
       await expect(executeFullSync()).rejects.toThrow(OFFLINE_SYNC_ERROR_MESSAGE);
+    });
+  });
+
+  describe('S1: GAS message 優先表示と UNAUTHORIZED 時 1回自動再取得', () => {
+    it('extractGasErrorMessage および各フェーズで GAS の message 欄が優先表示され、未設定時は error 欄にフォールバックすること', async () => {
+      expect(
+        extractGasErrorMessage({ message: 'GAS詳細理由', error: '旧エラー' }, '汎用エラー')
+      ).toBe('GAS詳細理由');
+      expect(extractGasErrorMessage({ error: '旧エラー' }, '汎用エラー')).toBe('旧エラー');
+      expect(extractGasErrorMessage({}, '汎用エラー')).toBe('汎用エラー');
+
+      await saveSyncConfig(dummyConfig);
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: false,
+          errorCode: 'DRIVE_TEMPORARY_ERROR',
+          message: 'Google Drive への一時的なアクセスエラーが発生しました。',
+        }),
+      } as unknown as Response);
+
+      await expect(executeFullSync({ config: dummyConfig })).rejects.toThrow(
+        'Google Drive への一時的なアクセスエラーが発生しました。'
+      );
+    });
+
+    it('source === "auto" で UNAUTHORIZED を受けた場合、/api/sync-config を1回だけ再取得してリトライ成功すること', async () => {
+      const autoOldConfig: SyncConnectionConfig = {
+        gasUrl: 'https://mock-gas.local/sync',
+        passphrase: 'old-passphrase-1111111111111111111',
+        source: 'auto',
+        updatedAt: '2026-11-18T10:00:00.000Z',
+      };
+      await saveSyncConfig(autoOldConfig);
+
+      let syncConfigFetchCount = 0;
+      const seenPassphrases: string[] = [];
+
+      globalThis.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (url === '/api/sync-config') {
+          syncConfigFetchCount++;
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              ok: true,
+              gasUrl: 'https://mock-gas.local/sync',
+              passphrase: 'new-passphrase-2222222222222222222',
+            }),
+          } as Response);
+        }
+
+        const body = JSON.parse(init?.body as string) as { action: string; passphrase: string };
+        seenPassphrases.push(body.passphrase);
+
+        if (body.passphrase !== 'new-passphrase-2222222222222222222') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              ok: false,
+              errorCode: 'UNAUTHORIZED',
+              message: '認証に失敗しました（合言葉が正しくありません）',
+            }),
+          } as Response);
+        }
+
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ok: true,
+            bottles: [],
+            photoMetas: [],
+            photosToUpload: [],
+            syncedAt: '2026-11-19T12:00:00.000Z',
+          }),
+        } as Response);
+      });
+
+      const res = await executeFullSync({ config: autoOldConfig });
+      expect(res.success).toBe(true);
+      expect(syncConfigFetchCount).toBe(1);
+      expect(seenPassphrases).toEqual([
+        'old-passphrase-1111111111111111111',
+        'new-passphrase-2222222222222222222',
+      ]);
+
+      const updatedConfig = await getSyncConfig();
+      expect(updatedConfig?.passphrase).toBe('new-passphrase-2222222222222222222');
+    });
+
+    it('再取得しても同じ合言葉または再試行も UNAUTHORIZED の場合は無限ループせずエラーになること', async () => {
+      const autoConfig: SyncConnectionConfig = {
+        gasUrl: 'https://mock-gas.local/sync',
+        passphrase: 'unchanged-passphrase-111111111111',
+        source: 'auto',
+        updatedAt: '2026-11-18T10:00:00.000Z',
+      };
+      await saveSyncConfig(autoConfig);
+
+      let syncConfigFetchCount = 0;
+      let gasCallCount = 0;
+
+      globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+        if (url === '/api/sync-config') {
+          syncConfigFetchCount++;
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              ok: true,
+              gasUrl: 'https://mock-gas.local/sync',
+              passphrase: 'unchanged-passphrase-111111111111',
+            }),
+          } as Response);
+        }
+        gasCallCount++;
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ok: false,
+            errorCode: 'UNAUTHORIZED',
+            message: '認証に失敗しました（合言葉が正しくありません）',
+          }),
+        } as Response);
+      });
+
+      await expect(executeFullSync({ config: autoConfig })).rejects.toThrow(
+        '認証に失敗しました（合言葉が正しくありません）'
+      );
+      expect(syncConfigFetchCount).toBe(1);
+      expect(gasCallCount).toBe(1);
+    });
+  });
+
+  describe('S2: 二重同期の排他制御と同期中編集保護', () => {
+    it('同期実行中に再度 executeFullSync を呼ぶと二重実行が排他されること', async () => {
+      await saveSyncConfig(dummyConfig);
+
+      let resolveSyncMeta!: (value: Response) => void;
+      const syncMetaPromise = new Promise<Response>((resolve) => {
+        resolveSyncMeta = resolve;
+      });
+
+      globalThis.fetch = vi.fn().mockImplementation(() => syncMetaPromise);
+
+      const firstRun = executeFullSync({ config: dummyConfig });
+      await new Promise((r) => setTimeout(r, 10));
+
+      await expect(executeFullSync({ config: dummyConfig })).rejects.toThrow(
+        SYNC_IN_PROGRESS_ERROR_MESSAGE
+      );
+
+      resolveSyncMeta({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          bottles: [],
+          photoMetas: [],
+          photosToUpload: [],
+          syncedAt: '2026-11-19T12:00:00.000Z',
+        }),
+      } as Response);
+
+      const res = await firstRun;
+      expect(res.success).toBe(true);
+    });
+
+    it('同期中（Phase 1 完了〜Phase 4 コミット間）に行われたローカル編集が上書きされず hasPendingLocalChanges: true が返ること', async () => {
+      await saveSyncConfig(dummyConfig);
+
+      const b1 = createTestBottle({
+        id: '00000000-0000-4000-8000-000000000001',
+        name: '同期前の酒',
+        updatedAt: '2026-11-18T10:00:00.000Z',
+      });
+      await saveBottleWithPhotos(b1, []);
+
+      let editedDuringSync = false;
+      globalThis.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+        const body = JSON.parse(init?.body as string) as { action: string };
+        if (body.action === 'sync_metadata') {
+          if (!editedDuringSync) {
+            editedDuringSync = true;
+            // ネットワーク応答待ちの間にユーザーがローカル編集・新規追加を行う
+            await saveBottleWithPhotos(
+              createTestBottle({
+                id: b1.id,
+                name: '同期中に更新した酒',
+                updatedAt: '2026-11-18T12:00:00.000Z',
+              }),
+              []
+            );
+            await saveBottleWithPhotos(
+              createTestBottle({
+                id: '00000000-0000-4000-8000-000000000002',
+                name: '同期中に新規追加した酒',
+                updatedAt: '2026-11-18T12:00:00.000Z',
+              }),
+              []
+            );
+          }
+
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              ok: true,
+              bottles: [b1],
+              photoMetas: [],
+              photosToUpload: [],
+              syncedAt: '2026-11-18T11:00:00.000Z',
+            }),
+          } as Response;
+        }
+        return Promise.reject(new Error(`Unexpected action: ${body.action}`));
+      });
+
+      const res = await executeFullSync({ config: dummyConfig });
+      expect(res.success).toBe(true);
+      expect(res.hasPendingLocalChanges).toBe(true);
+
+      const saved1 = await getBottle('00000000-0000-4000-8000-000000000001');
+      const saved2 = await getBottle('00000000-0000-4000-8000-000000000002');
+      expect(saved1?.name).toBe('同期中に更新した酒');
+      expect(saved2?.name).toBe('同期中に新規追加した酒');
+    });
+  });
+
+  describe('D3 + M4 + S1: クライアント (executeFullSync) × 本番 GAS (gas/Code.gs) 結合テスト', () => {
+    it('M4: 端末Aが写真アップロード途中で失敗した後、端末Bが同期しても双方向整合が保たれ、端末A復旧後の再同期で端末Bにも写真が復元されること', async () => {
+      const gasPassphrase = 'integration-test-passphrase-32chars';
+      const harness = createGasTestHarness({
+        passphrase: gasPassphrase,
+        nowIso: '2026-11-19T10:00:00.000Z',
+      });
+      const sharedConfig: SyncConnectionConfig = {
+        gasUrl: 'https://mock-gas.local/sync',
+        passphrase: gasPassphrase,
+        source: 'manual',
+        updatedAt: '2026-11-19T09:00:00.000Z',
+      };
+
+      const bottleId = '00000000-0000-4000-8000-000000000011';
+      const photoId = '11111111-0000-4000-8000-000000000011';
+      const bottleTime = '2026-11-19T09:30:00.000Z';
+
+      const b1 = createTestBottle({
+        id: bottleId,
+        name: '途中停止テスト酒',
+        photoIds: [photoId],
+        primaryPhotoId: photoId,
+        createdAt: bottleTime,
+        updatedAt: bottleTime,
+      });
+      const p1 = createTestPhotoRecord({
+        id: photoId,
+        bottleId,
+        driveFileId: null,
+        createdAt: bottleTime,
+        updatedAt: bottleTime,
+      });
+
+      // 1. 端末A: ボトルと写真を登録し、Phase 2 (upload_photo) で通信失敗させる
+      await saveSyncConfig(sharedConfig);
+      await saveBottleWithPhotos(b1, [p1]);
+
+      let failUploadOnce = true;
+      globalThis.fetch = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+        const payload = JSON.parse(init?.body as string) as { action: string };
+        if (payload.action === 'upload_photo' && failUploadOnce) {
+          failUploadOnce = false;
+          return Promise.reject(new TypeError('Failed to fetch'));
+        }
+        const gasRes = harness.post(payload);
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => gasRes,
+        } as Response);
+      });
+
+      await expect(executeFullSync({ config: sharedConfig })).rejects.toThrow(OFFLINE_SYNC_ERROR_MESSAGE);
+
+      // 2. 端末B (空端末状態に切替): 同期しても壊れず、warnings 付きで成功し、バックアップ検証が通ること
+      await clearDatabase();
+      await saveSyncConfig(sharedConfig);
+
+      const syncB1 = await executeFullSync({ config: sharedConfig });
+      expect(syncB1.success).toBe(true);
+      expect(syncB1.warnings).toBeDefined();
+      expect(syncB1.warnings?.[0]).toContain('他端末で送信未完了の写真');
+
+      const bottleOnB1 = await getBottle(bottleId);
+      expect(bottleOnB1?.photoIds).toEqual([]);
+      expect(bottleOnB1?.updatedAt).toBe(bottleTime);
+
+      const backupB1 = await exportBackupData();
+      expect(validateBackupData(backupB1).success).toBe(true);
+
+      // 3. 端末A に戻して再同期: upload_photo が完了し Drive に写真が上がる
+      await clearDatabase();
+      await saveSyncConfig(sharedConfig);
+      await saveBottleWithPhotos(b1, [p1]);
+
+      const syncA2 = await executeFullSync({ config: sharedConfig });
+      expect(syncA2.success).toBe(true);
+      expect(syncA2.uploadedCount).toBe(1);
+
+      // 4. 端末B (先ほど backupB1 を持っていた状態) が再同期: 写真が自動復元されバックアップ整合も維持
+      await clearDatabase();
+      await saveSyncConfig(sharedConfig);
+      await importBackupData(backupB1);
+
+      const syncB2 = await executeFullSync({ config: sharedConfig });
+      expect(syncB2.success).toBe(true);
+      expect(syncB2.downloadedCount).toBe(1);
+      expect(syncB2.warnings).toBeUndefined();
+
+      const bottleOnB2 = await getBottle(bottleId);
+      expect(bottleOnB2?.photoIds).toEqual([photoId]);
+      expect(await getPhoto(photoId)).toBeDefined();
+
+      const backupB2 = await exportBackupData();
+      expect(validateBackupData(backupB2).success).toBe(true);
+      expect(backupB2.photos).toHaveLength(1);
+    });
+
+    it('S1 + D3: 本番 GAS 側の合言葉変更後、auto 端末が /api/sync-config を自動再取得し、GAS のエラー message も取得できること', async () => {
+      const oldPass = 'old-integration-pass-32-characters';
+      const newPass = 'new-integration-pass-32-characters';
+      const harness = createGasTestHarness({
+        passphrase: newPass,
+        nowIso: '2026-11-19T10:00:00.000Z',
+      });
+
+      const autoConfig: SyncConnectionConfig = {
+        gasUrl: 'https://mock-gas.local/sync',
+        passphrase: oldPass,
+        source: 'auto',
+        updatedAt: '2026-11-19T09:00:00.000Z',
+      };
+      await saveSyncConfig(autoConfig);
+
+      globalThis.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        if (url === '/api/sync-config') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              ok: true,
+              gasUrl: 'https://mock-gas.local/sync',
+              passphrase: newPass,
+            }),
+          } as Response);
+        }
+        const payload = JSON.parse(init?.body as string) as unknown;
+        const gasRes = harness.post(payload);
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => gasRes,
+        } as Response);
+      });
+
+      const res = await executeFullSync({ config: autoConfig });
+      expect(res.success).toBe(true);
+      expect((await getSyncConfig())?.passphrase).toBe(newPass);
+
+      // GAS 側の LOCK_TIMEOUT の日本語 message がそのまま表面化すること
+      harness.faults.forceLockTimeout = true;
+      await expect(executeFullSync()).rejects.toThrow(
+        '他の同期処理が実行中のためタイムアウトしました'
+      );
     });
   });
 });

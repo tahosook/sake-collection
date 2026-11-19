@@ -229,6 +229,7 @@ export interface SyncMetadataResponse {
   syncedAt: string;
   error?: string;
   errorCode?: string;
+  message?: string;
 }
 
 /** Phase 2: 写真アップロードリクエスト */
@@ -246,6 +247,7 @@ export interface UploadPhotoResponse {
   deduplicated: boolean;
   error?: string;
   errorCode?: string;
+  message?: string;
 }
 
 /** Phase 3: 写真ダウンロードリクエスト */
@@ -261,5 +263,6 @@ export interface DownloadPhotosResponse {
   photos: PhotoRecord[];
   error?: string;
   errorCode?: string;
+  message?: string;
 }
 
