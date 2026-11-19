@@ -33,6 +33,7 @@ export const App: React.FC = () => {
     changeBottleStatus,
     deleteBottle,
     exportBackup,
+    exportBackupBlob,
     importBackup,
     resetWithSampleData,
     clearAll,
@@ -436,6 +437,7 @@ export const App: React.FC = () => {
                 allBottles={allBottles}
                 photos={photos}
                 onExportBackup={exportBackup}
+                onExportBackupBlob={exportBackupBlob}
                 onImportBackup={importBackup}
                 onResetSampleData={resetWithSampleData}
                 onClearAll={clearAll}

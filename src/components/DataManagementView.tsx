@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { BackupData, BottleRecord, PhotoRecord } from '../types/sake';
-import { ImportBackupResult } from '../storage/db';
+import { ExportBackupBlobResult, ImportBackupResult } from '../storage/db';
+import { validateBackupData } from '../domain/validation';
 import { DownloadIcon, UploadIcon, CheckIcon } from './Icons';
 import { SyncSection } from './SyncSection';
 
@@ -9,10 +10,19 @@ export interface DataManagementViewProps {
   allBottles: BottleRecord[];
   photos: PhotoRecord[];
   onExportBackup: () => Promise<BackupData>;
+  onExportBackupBlob?: () => Promise<ExportBackupBlobResult>;
   onImportBackup: (raw: unknown) => Promise<ImportBackupResult>;
   onResetSampleData: () => Promise<{ bottles: number; photos: number }>;
   onClearAll: () => Promise<void>;
   onSyncComplete?: () => Promise<void> | void;
+}
+
+interface PendingBackupImport {
+  fileName: string;
+  data: BackupData;
+  activeBottleCount: number;
+  deletedBottleCount: number;
+  photoCount: number;
 }
 
 export const DataManagementView: React.FC<DataManagementViewProps> = ({
@@ -20,6 +30,7 @@ export const DataManagementView: React.FC<DataManagementViewProps> = ({
   allBottles,
   photos,
   onExportBackup,
+  onExportBackupBlob,
   onImportBackup,
   onResetSampleData,
   onClearAll,
@@ -29,16 +40,42 @@ export const DataManagementView: React.FC<DataManagementViewProps> = ({
     null
   );
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [pendingImport, setPendingImport] = useState<PendingBackupImport | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // 1. バックアップの書き出し (JSON ダウンロード)
+  const formatDateTime = (isoString: string): string => {
+    try {
+      const d = new Date(isoString);
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    } catch {
+      return isoString;
+    }
+  };
+
+  // 1. バックアップの書き出し (省メモリ Blob JSON ダウンロード + 自己検証)
   const handleExport = async () => {
     setIsProcessing(true);
     setStatusMessage(null);
     try {
-      const backup = await onExportBackup();
-      const jsonStr = JSON.stringify(backup, null, 2);
-      const blob = new Blob([jsonStr], { type: 'application/json' });
+      let blob: Blob;
+      let bottleCount: number;
+      let photoCount: number;
+      let repairedReferenceCount = 0;
+
+      if (onExportBackupBlob) {
+        const result = await onExportBackupBlob();
+        blob = result.blob;
+        bottleCount = result.bottleCount;
+        photoCount = result.photoCount;
+        repairedReferenceCount = result.repairedReferenceCount;
+      } else {
+        const backup = await onExportBackup();
+        blob = new Blob([JSON.stringify(backup)], { type: 'application/json' });
+        bottleCount = backup.bottles.length;
+        photoCount = backup.photos.length;
+      }
+
       const url = URL.createObjectURL(blob);
 
       const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
@@ -50,11 +87,15 @@ export const DataManagementView: React.FC<DataManagementViewProps> = ({
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      window.setTimeout(() => URL.revokeObjectURL(url), 10000);
 
+      const repairNote =
+        repairedReferenceCount > 0
+          ? `\n（欠損していた写真参照 ${repairedReferenceCount}件を自動修復して書き出しました）`
+          : '';
       setStatusMessage({
         type: 'success',
-        text: `バックアップファイル（${filename}）を書き出しました（ボトル: ${backup.bottles.length}件、写真: ${backup.photos.length}件）。`,
+        text: `バックアップファイル（${filename}）を書き出しました（ボトル: ${bottleCount}件、写真: ${photoCount}件）。${repairNote}`,
       });
     } catch (err) {
       setStatusMessage({
@@ -66,7 +107,7 @@ export const DataManagementView: React.FC<DataManagementViewProps> = ({
     }
   };
 
-  // 2. バックアップの読み込み (ファイル選択)
+  // 2. バックアップの読み込み (第1段階: 事前検証のみ行い、確認モーダルを表示)
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -74,48 +115,69 @@ export const DataManagementView: React.FC<DataManagementViewProps> = ({
     setIsProcessing(true);
     setStatusMessage(null);
 
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      try {
-        const text = event.target?.result;
-        if (typeof text !== 'string') {
-          throw new Error('ファイルの読み込みに失敗しました');
-        }
-
-        const res = await onImportBackup(text);
-        if (res.success) {
-          setStatusMessage({
-            type: 'success',
-            text: `バックアップの復元が完了しました（ボトル: ${res.count.bottles}件、写真: ${res.count.photos}件）。`,
-          });
-        } else {
-          setStatusMessage({
-            type: 'error',
-            text: `バックアップの復元に失敗しました（既存データは保護され一切変更されていません）:\n${res.error}`,
-          });
-        }
-      } catch (err) {
+    try {
+      const text = await file.text();
+      const valResult = validateBackupData(text);
+      if (!valResult.success) {
         setStatusMessage({
           type: 'error',
-          text: `エラーが発生しました: ${err instanceof Error ? err.message : String(err)}`,
+          text: `バックアップの復元に失敗しました（既存データは保護され一切変更されていません）:\n${valResult.error}`,
         });
-      } finally {
-        setIsProcessing(false);
-        if (fileInputRef.current) {
-          fileInputRef.current.value = '';
-        }
+        return;
       }
-    };
 
-    reader.onerror = () => {
+      const activeBottleCount = valResult.data.bottles.filter((b) => !b.deleted).length;
+      const deletedBottleCount = valResult.data.bottles.length - activeBottleCount;
+      setPendingImport({
+        fileName: file.name,
+        data: valResult.data,
+        activeBottleCount,
+        deletedBottleCount,
+        photoCount: valResult.data.photos.length,
+      });
+    } catch (err) {
       setStatusMessage({
         type: 'error',
-        text: 'ファイルの読み込み中にシステムエラーが発生しました',
+        text: `ファイルの読み込み中にエラーが発生しました: ${err instanceof Error ? err.message : String(err)}`,
       });
+    } finally {
       setIsProcessing(false);
-    };
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
 
-    reader.readAsText(file);
+  // 2b. バックアップ復元の確定実行 (第2段階)
+  const handleConfirmImport = async () => {
+    if (!pendingImport || isProcessing) return;
+    setIsProcessing(true);
+    setStatusMessage(null);
+
+    try {
+      const res = await onImportBackup(pendingImport.data);
+      if (res.success) {
+        setPendingImport(null);
+        setStatusMessage({
+          type: 'success',
+          text: `バックアップの復元が完了しました（ボトル: ${res.count.bottles}件、写真: ${res.count.photos}件）。\n次回クラウド同期を実行すると、この復元内容がクラウド側にも反映されます。`,
+        });
+      } else {
+        setPendingImport(null);
+        setStatusMessage({
+          type: 'error',
+          text: `バックアップの復元に失敗しました（既存データは保護され一切変更されていません）:\n${res.error}`,
+        });
+      }
+    } catch (err) {
+      setPendingImport(null);
+      setStatusMessage({
+        type: 'error',
+        text: `エラーが発生しました: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   // 3. サンプルデータ投入
@@ -317,6 +379,73 @@ export const DataManagementView: React.FC<DataManagementViewProps> = ({
         <p>• 外部 LLM API との直接通信は行いません（ローカルファースト設計）。</p>
         <p>• ステップ4: クラウド同期・Access 保護対応版。</p>
       </div>
+
+      {/* S5: バックアップ復元確認モーダル */}
+      {pendingImport && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="backup-restore-confirm-title"
+        >
+          <div className="w-full max-w-md bg-white rounded-2xl border border-stone-200 shadow-xl p-5 space-y-4">
+            <h3 id="backup-restore-confirm-title" className="text-base font-bold text-stone-900">
+              バックアップを復元しますか？
+            </h3>
+
+            <div className="bg-stone-50 border border-stone-200 rounded-xl p-3.5 space-y-1.5 text-xs text-stone-700">
+              <p>
+                <span className="font-bold text-stone-900">ファイル:</span> {pendingImport.fileName}
+              </p>
+              <p>
+                <span className="font-bold text-stone-900">作成日時:</span>{' '}
+                {formatDateTime(pendingImport.data.exportedAt)}
+              </p>
+              <p>
+                <span className="font-bold text-stone-900">バックアップ内容:</span> 有効ボトル{' '}
+                {pendingImport.activeBottleCount}本
+                {pendingImport.deletedBottleCount > 0
+                  ? `（ほか削除記録 ${pendingImport.deletedBottleCount}件）`
+                  : ''}
+                、写真 {pendingImport.photoCount}枚
+              </p>
+              <p>
+                <span className="font-bold text-stone-900">現在の端末データ:</span> 有効ボトル{' '}
+                {bottles.length}本、写真 {photos.length}枚
+              </p>
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-950 leading-relaxed space-y-1">
+              <p className="font-bold">ご注意</p>
+              <p>
+                復元を実行すると、現在この端末内にあるボトルと写真のデータはバックアップの内容で置き換わります。
+              </p>
+              <p>
+                復元後、次のクラウド同期では復元した内容がクラウド側にも反映されます（クラウド側にのみ存在する別ボトルがある場合は和集合で合流します）。
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setPendingImport(null)}
+                disabled={isProcessing}
+                className="min-h-touch py-2.5 px-3 bg-stone-100 hover:bg-stone-200 text-stone-800 border border-stone-300 font-bold text-sm rounded-xl transition disabled:opacity-50"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmImport}
+                disabled={isProcessing}
+                className="min-h-touch py-2.5 px-3 bg-stone-900 hover:bg-stone-800 text-white font-bold text-sm rounded-xl transition disabled:opacity-50"
+              >
+                {isProcessing ? '復元中...' : 'この内容で復元する'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

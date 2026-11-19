@@ -9,8 +9,8 @@ import {
   BottleStatus,
 } from '../types/sake';
 import { SAMPLE_BOTTLES, SAMPLE_PHOTOS } from '../data/sampleData';
-import { validateBackupData } from '../domain/validation';
-import { sanitizeDeletedBottle, toPhotoSyncMeta } from '../domain/syncMerge';
+import { validateBackupData, validateBottleRecord, validatePhotoRecord } from '../domain/validation';
+import { hasSampleDataRecords, sanitizeDeletedBottle, toPhotoSyncMeta } from '../domain/syncMerge';
 
 export const DB_NAME = 'sake-collection-db';
 export const DB_VERSION = 1;
@@ -540,6 +540,8 @@ export interface CommitSyncResultInput {
   snapshotBottleUpdatedAt?: Record<string, string>;
   /** 同期開始時にサーバーへ送信済みだった pendingDeletedPhotos スナップショット (S2) */
   sentPendingDeletedPhotos?: Array<{ id: string; updatedAt: string }>;
+  /** 今回の同期で処理した pendingBackupRestoreAt の値 (M1) */
+  consumedBackupRestoreAt?: string;
 }
 
 export interface CommitSyncResultOutput {
@@ -558,6 +560,7 @@ export async function commitSyncResultToDb(input: CommitSyncResultInput): Promis
     syncedAtIso,
     snapshotBottleUpdatedAt,
     sentPendingDeletedPhotos,
+    consumedBackupRestoreAt,
   } = input;
   const db = await getDb();
   const tx = db.transaction(['bottles', 'photos', 'meta'], 'readwrite');
@@ -701,6 +704,14 @@ export async function commitSyncResultToDb(input: CommitSyncResultInput): Promis
   // 7. 一時ダウンロードキャッシュがあれば削除
   await metaStore.delete('syncDownloadCache');
 
+  // 8. 処理済み pendingBackupRestoreAt のクリア (同期中の別復元は消さない)
+  if (consumedBackupRestoreAt !== undefined) {
+    const restoreRec = await metaStore.get('pendingBackupRestoreAt');
+    if (restoreRec?.value === consumedBackupRestoreAt) {
+      await metaStore.delete('pendingBackupRestoreAt');
+    }
+  }
+
   await tx.done;
 
   return { hasPendingLocalChanges };
@@ -725,44 +736,92 @@ export async function clearPendingDeletedPhotos(nowIso: string = new Date().toIS
 // バックアップ書き出し・読み込み (Export / Import)
 // ==========================================
 
-/**
- * IndexedDB 内の全データをバックアップ形式（BackupData）で書き出す
- *
- * 整合性保証:
- * - deleted === true のボトルは photoIds: [] と primaryPhotoId: null に正規化して出力する。
- * - 写真については、deleted === true のもの、および親ボトルが deleted === true（または存在しない）ものを除外し、
- *   有効なボトルに紐づく有効な写真のみを出力する（既存の未同期・旧形式トームストーンの救済）。
- * - 有効なボトル（deleted === false）および有効な写真は一切無加工で出力する。
- */
-export async function exportBackupData(nowIso: string = new Date().toISOString()): Promise<BackupData> {
-  const db = await getDb();
-  const rawBottles = await db.getAll('bottles');
-  const rawPhotos = await db.getAll('photos');
+export interface ExportBackupBlobResult {
+  blob: Blob;
+  bottleCount: number;
+  photoCount: number;
+  repairedReferenceCount: number;
+}
 
-  const bottleMap = new Map<string, BottleRecord>(rawBottles.map((b) => [b.id, b]));
+const BACKUP_EXPORT_CHUNK_BYTES = 512 * 1024; // 512KB ごとに Blob チャンク化 (S6)
 
-  // 1. ボトルの正規化: deleted === true のボトルのみ photoIds: [], primaryPhotoId: null に正規化
-  const bottles = rawBottles.map((b) => {
-    if (b.deleted) {
-      return {
+function normalizeBottleForExport(
+  b: BottleRecord,
+  existingPhotoIdsForBottle: Set<string>
+): { bottle: BottleRecord; repairedCount: number } {
+  if (b.deleted) {
+    if (b.photoIds.length === 0 && b.primaryPhotoId === null) {
+      return { bottle: b, repairedCount: 0 };
+    }
+    return {
+      bottle: {
         ...b,
         photoIds: [],
         primaryPhotoId: null,
-      };
-    }
-    return b;
-  });
+      },
+      repairedCount: 0,
+    };
+  }
 
-  // 2. 写真の正規化: p.deleted === true または親ボトルが deleted === true の残留写真を除外
+  const cleanedPhotoIds = b.photoIds.filter((pid) => existingPhotoIdsForBottle.has(pid));
+  const repairedCount = b.photoIds.length - cleanedPhotoIds.length;
+  const cleanedPrimary =
+    b.primaryPhotoId && cleanedPhotoIds.includes(b.primaryPhotoId)
+      ? b.primaryPhotoId
+      : cleanedPhotoIds[0] ?? null;
+
+  if (repairedCount > 0 || cleanedPrimary !== b.primaryPhotoId) {
+    return {
+      bottle: {
+        ...b,
+        photoIds: cleanedPhotoIds,
+        primaryPhotoId: cleanedPrimary,
+      },
+      repairedCount,
+    };
+  }
+
+  return { bottle: b, repairedCount: 0 };
+}
+
+/**
+ * IndexedDB 内の全データをバックアップ形式（BackupData）で書き出す
+ *
+ * 整合性保証 (M4):
+ * - deleted === true のボトルは photoIds: [], primaryPhotoId: null に正規化する。
+ * - 有効ボトルに欠損写真参照がある場合は自動修復して双方向整合を保つ。
+ * - 出力確定前に validateBackupData による自己検証を必ず通し、失敗時は lastBackupAt を更新せず例外を投げる。
+ */
+export async function exportBackupData(nowIso: string = new Date().toISOString()): Promise<BackupData> {
+  const db = await getDb();
+  const tx = db.transaction(['bottles', 'photos'], 'readonly');
+  const rawBottles = await tx.objectStore('bottles').getAll();
+  const rawPhotos = await tx.objectStore('photos').getAll();
+  await tx.done;
+
+  const rawBottleMap = new Map<string, BottleRecord>(rawBottles.map((b) => [b.id, b]));
+  const actualPhotoIdsByBottle = new Map<string, Set<string>>();
+
   const photos = rawPhotos.filter((p) => {
     if (p.deleted) {
       return false;
     }
-    const parent = bottleMap.get(p.bottleId);
-    if (!parent || parent.deleted) {
+    const parent = rawBottleMap.get(p.bottleId);
+    if (!parent || parent.deleted || !parent.photoIds.includes(p.id)) {
       return false;
     }
+    let idSet = actualPhotoIdsByBottle.get(p.bottleId);
+    if (!idSet) {
+      idSet = new Set<string>();
+      actualPhotoIdsByBottle.set(p.bottleId, idSet);
+    }
+    idSet.add(p.id);
     return true;
+  });
+
+  const bottles = rawBottles.map((b) => {
+    const idSet = actualPhotoIdsByBottle.get(b.id) ?? new Set<string>();
+    return normalizeBottleForExport(b, idSet).bottle;
   });
 
   const backup: BackupData = {
@@ -772,8 +831,122 @@ export async function exportBackupData(nowIso: string = new Date().toISOString()
     photos,
   };
 
+  // M4: 書き出し自己検証
+  const valRes = validateBackupData(backup);
+  if (!valRes.success) {
+    throw new Error(`バックアップデータの自己検証に失敗しました: ${valRes.error}`);
+  }
+
   await setMeta('lastBackupAt', nowIso, nowIso);
-  return backup;
+  return valRes.data;
+}
+
+/**
+ * IndexedDB 内の全データを省メモリ（カーソル逐次走査＋チャンク Blob 化）で JSON Blob として書き出す (S6 / M4)
+ *
+ * - photos ストアを openCursor() で1件ずつ検証・コンパクトシリアライズし、512KB ごとに Blob へ逃がして文字列参照を解放する。
+ * - 書き出し確定前に全レコードのスキーマおよび双方向整合を検証し、失敗時は lastBackupAt を更新せず例外を投げる。
+ */
+export async function exportBackupBlob(
+  nowIso: string = new Date().toISOString()
+): Promise<ExportBackupBlobResult> {
+  const headerCheck = validateBackupData({
+    schemaVersion: 1,
+    exportedAt: nowIso,
+    bottles: [],
+    photos: [],
+  });
+  if (!headerCheck.success) {
+    throw new Error(`バックアップデータの自己検証に失敗しました: ${headerCheck.error}`);
+  }
+
+  const db = await getDb();
+  const tx = db.transaction(['bottles', 'photos'], 'readonly');
+  const rawBottles = await tx.objectStore('bottles').getAll();
+  const rawBottleMap = new Map<string, BottleRecord>(rawBottles.map((b) => [b.id, b]));
+
+  const actualPhotoIdsByBottle = new Map<string, Set<string>>();
+  const seenPhotoIds = new Set<string>();
+  const photoBlobParts: Blob[] = [];
+  let currentChunkStrings: string[] = [];
+  let currentChunkBytes = 0;
+  let photoCount = 0;
+
+  let cursor = await tx.objectStore('photos').openCursor();
+  while (cursor) {
+    const p = cursor.value;
+    if (!p.deleted) {
+      const parent = rawBottleMap.get(p.bottleId);
+      if (parent && !parent.deleted && parent.photoIds.includes(p.id)) {
+        if (seenPhotoIds.has(p.id)) {
+          throw new Error(`バックアップデータの自己検証に失敗しました: 重複する写真 ID が見つかりました: ${p.id}`);
+        }
+        const photoVal = validatePhotoRecord(p, photoCount + 1);
+        if (!photoVal.success) {
+          throw new Error(`バックアップデータの自己検証に失敗しました: ${photoVal.error}`);
+        }
+        seenPhotoIds.add(p.id);
+
+        let idSet = actualPhotoIdsByBottle.get(p.bottleId);
+        if (!idSet) {
+          idSet = new Set<string>();
+          actualPhotoIdsByBottle.set(p.bottleId, idSet);
+        }
+        idSet.add(p.id);
+
+        const serialized = JSON.stringify(photoVal.data);
+        const piece = photoCount > 0 ? `,${serialized}` : serialized;
+        currentChunkStrings.push(piece);
+        currentChunkBytes += piece.length;
+        photoCount++;
+
+        if (currentChunkBytes >= BACKUP_EXPORT_CHUNK_BYTES) {
+          photoBlobParts.push(new Blob(currentChunkStrings, { type: 'application/json' }));
+          currentChunkStrings = [];
+          currentChunkBytes = 0;
+        }
+      }
+    }
+    cursor = await cursor.continue();
+  }
+  await tx.done;
+
+  if (currentChunkStrings.length > 0) {
+    photoBlobParts.push(new Blob(currentChunkStrings, { type: 'application/json' }));
+    currentChunkStrings = [];
+  }
+
+  const normalizedBottles: BottleRecord[] = [];
+  const seenBottleIds = new Set<string>();
+  let repairedReferenceCount = 0;
+
+  for (let i = 0; i < rawBottles.length; i++) {
+    const rawBottle = rawBottles[i]!;
+    const idSet = actualPhotoIdsByBottle.get(rawBottle.id) ?? new Set<string>();
+    const { bottle: normalized, repairedCount } = normalizeBottleForExport(rawBottle, idSet);
+    repairedReferenceCount += repairedCount;
+
+    if (seenBottleIds.has(normalized.id)) {
+      throw new Error(`バックアップデータの自己検証に失敗しました: 重複するボトル ID が見つかりました: ${normalized.id}`);
+    }
+    const bottleVal = validateBottleRecord(normalized, i + 1);
+    if (!bottleVal.success) {
+      throw new Error(`バックアップデータの自己検証に失敗しました: ${bottleVal.error}`);
+    }
+    seenBottleIds.add(normalized.id);
+    normalizedBottles.push(bottleVal.data);
+  }
+
+  const header = `{"schemaVersion":1,"exportedAt":${JSON.stringify(nowIso)},"bottles":${JSON.stringify(normalizedBottles)},"photos":[`;
+  const blob = new Blob([header, ...photoBlobParts, ']}'], { type: 'application/json' });
+
+  await setMeta('lastBackupAt', nowIso, nowIso);
+  return {
+    blob,
+    bottleCount: normalizedBottles.length,
+    photoCount,
+    repairedReferenceCount,
+  };
 }
 
 export type ImportBackupResult =
@@ -781,14 +954,21 @@ export type ImportBackupResult =
   | { success: false; error: string };
 
 /**
- * バックアップデータを検証し、整合性が確認された場合のみ IndexedDB に復元する
+ * バックアップデータを検証し、整合性が確認された場合のみ IndexedDB に復元する (M1 対応)
  *
  * 要件:
  * - 読み込み前の厳密検証（validateBackupData）
  * - 検証失敗時は既存データを一切変更せずエラーを返す（アトミックな拒否）
- * - 検証成功時のみ、単一トランザクション内で既存データをクリアして新しいデータを投入する
+ * - 検証成功時:
+ *   - 復元基準時刻 restoredAt を既存データ・バックアップ内の最大 updatedAt より真に新しい時刻へ確定
+ *   - 復元ボトル・写真の updatedAt を restoredAt に昇格、復元写真の driveFileId を null にリセット
+ *   - 復元前にこの端末に存在しバックアップに含まれないボトルをトームストーン化し、同期済み写真を pendingDeletedPhotos へ退避
+ *   - syncDownloadCache を削除、isSampleDataLoaded を実データ有無へ整合、pendingBackupRestoreAt を記録
  */
-export async function importBackupData(raw: unknown): Promise<ImportBackupResult> {
+export async function importBackupData(
+  raw: unknown,
+  nowIsoInput?: string
+): Promise<ImportBackupResult> {
   // 1. スキーマ・整合性・参照関係の厳密検証
   const valResult = validateBackupData(raw);
   if (!valResult.success) {
@@ -798,25 +978,126 @@ export async function importBackupData(raw: unknown): Promise<ImportBackupResult
   const { bottles, photos } = valResult.data;
   const db = await getDb();
 
-  // 2. 単一トランザクション内で安全に既存クリア＆一括投入
+  // 2. 単一トランザクション内で既存退避・クリア・昇格投入
   const tx = db.transaction(['bottles', 'photos', 'meta'], 'readwrite');
   try {
-    await tx.objectStore('bottles').clear();
-    await tx.objectStore('photos').clear();
+    const bottleStore = tx.objectStore('bottles');
+    const photoStore = tx.objectStore('photos');
+    const metaStore = tx.objectStore('meta');
 
-    for (const bottle of bottles) {
-      await tx.objectStore('bottles').put(bottle);
+    const existingBottles = await bottleStore.getAll();
+    const existingPhotos = await photoStore.getAll();
+    const existingPendingMeta = await metaStore.get('pendingDeletedPhotos');
+    const lastSyncRec = await metaStore.get('lastSyncAt');
+
+    const baseNowMs = nowIsoInput ? Date.parse(nowIsoInput) : Date.now();
+    let maxExistingMs = Number.isFinite(baseNowMs) ? baseNowMs : Date.now();
+
+    const considerTimestamp = (iso: unknown) => {
+      if (typeof iso === 'string') {
+        const ms = Date.parse(iso);
+        if (Number.isFinite(ms) && ms >= maxExistingMs) {
+          maxExistingMs = ms + 1;
+        }
+      }
+    };
+
+    for (const eb of existingBottles) {
+      considerTimestamp(eb.updatedAt);
     }
-    for (const photo of photos) {
-      await tx.objectStore('photos').put(photo);
+    for (const ep of existingPhotos) {
+      considerTimestamp(ep.updatedAt);
+    }
+    for (const ib of bottles) {
+      considerTimestamp(ib.updatedAt);
+    }
+    for (const ip of photos) {
+      considerTimestamp(ip.updatedAt);
+    }
+    considerTimestamp(lastSyncRec?.value);
+
+    const restoredAt = new Date(maxExistingMs).toISOString();
+
+    const importedBottleIdSet = new Set(bottles.map((b) => b.id));
+    const importedPhotoIdSet = new Set(photos.map((p) => p.id));
+
+    const bottlesToPut: BottleRecord[] = bottles.map((b) =>
+      sanitizeDeletedBottle({
+        ...b,
+        updatedAt: restoredAt,
+      })
+    );
+
+    // 復元前にこの端末に存在したバックアップ外ボトルをトームストーンとして残す
+    for (const eb of existingBottles) {
+      if (!importedBottleIdSet.has(eb.id)) {
+        bottlesToPut.push({
+          ...eb,
+          deleted: true,
+          updatedAt: restoredAt,
+          photoIds: [],
+          primaryPhotoId: null,
+        });
+      }
     }
 
-    const nowIso = new Date().toISOString();
-    await tx.objectStore('meta').put({
-      key: 'lastImportAt',
-      value: nowIso,
-      updatedAt: nowIso,
+    const photosToPut: PhotoRecord[] = photos.map((p) => ({
+      ...p,
+      driveFileId: null,
+      updatedAt: restoredAt,
+    }));
+
+    // pendingDeletedPhotos の更新（復元対象写真 ID の古い削除予約を除外し、今回消える同期済み写真を追記）
+    const existingPendingList = Array.isArray(existingPendingMeta?.value)
+      ? (existingPendingMeta.value as PhotoSyncMeta[])
+      : [];
+    const pendingMap = new Map<string, PhotoSyncMeta>();
+    for (const pm of existingPendingList) {
+      if (!importedPhotoIdSet.has(pm.id)) {
+        pendingMap.set(pm.id, pm);
+      }
+    }
+    for (const ep of existingPhotos) {
+      if (!importedPhotoIdSet.has(ep.id) && ep.driveFileId !== null) {
+        pendingMap.set(ep.id, {
+          ...toPhotoSyncMeta(ep),
+          deleted: true,
+          updatedAt: restoredAt,
+        });
+      }
+    }
+
+    await bottleStore.clear();
+    await photoStore.clear();
+
+    for (const bottle of bottlesToPut) {
+      await bottleStore.put(bottle);
+    }
+    for (const photo of photosToPut) {
+      await photoStore.put(photo);
+    }
+
+    await metaStore.put({
+      key: 'pendingDeletedPhotos',
+      value: Array.from(pendingMap.values()),
+      updatedAt: restoredAt,
     });
+    await metaStore.put({
+      key: 'isSampleDataLoaded',
+      value: hasSampleDataRecords(bottles),
+      updatedAt: restoredAt,
+    });
+    await metaStore.put({
+      key: 'pendingBackupRestoreAt',
+      value: restoredAt,
+      updatedAt: restoredAt,
+    });
+    await metaStore.put({
+      key: 'lastImportAt',
+      value: restoredAt,
+      updatedAt: restoredAt,
+    });
+    await metaStore.delete('syncDownloadCache');
 
     await tx.done;
 
@@ -833,6 +1114,52 @@ export async function importBackupData(raw: unknown): Promise<ImportBackupResult
       error: `データベースへの書き込み中にエラーが発生しました: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
+}
+
+/**
+ * 端末時計がサーバー時刻より遅れている場合のクロックスキュー補正 (M1)
+ * 復元済みレコードおよび pendingDeletedPhotos の updatedAt を bumpedIso へ引き上げる
+ */
+export async function bumpLocalRecordsUpdatedAt(bumpedIso: string): Promise<void> {
+  const db = await getDb();
+  const tx = db.transaction(['bottles', 'photos', 'meta'], 'readwrite');
+  const bottleStore = tx.objectStore('bottles');
+  const photoStore = tx.objectStore('photos');
+  const metaStore = tx.objectStore('meta');
+
+  const bottles = await bottleStore.getAll();
+  for (const b of bottles) {
+    if (b.updatedAt < bumpedIso) {
+      await bottleStore.put({ ...b, updatedAt: bumpedIso });
+    }
+  }
+
+  const photos = await photoStore.getAll();
+  for (const p of photos) {
+    if (p.updatedAt < bumpedIso) {
+      await photoStore.put({ ...p, updatedAt: bumpedIso });
+    }
+  }
+
+  const pendingRec = await metaStore.get('pendingDeletedPhotos');
+  if (Array.isArray(pendingRec?.value)) {
+    const updatedPending = (pendingRec.value as PhotoSyncMeta[]).map((pm) =>
+      pm.updatedAt < bumpedIso ? { ...pm, updatedAt: bumpedIso } : pm
+    );
+    await metaStore.put({
+      key: 'pendingDeletedPhotos',
+      value: updatedPending,
+      updatedAt: bumpedIso,
+    });
+  }
+
+  await metaStore.put({
+    key: 'pendingBackupRestoreAt',
+    value: bumpedIso,
+    updatedAt: bumpedIso,
+  });
+
+  await tx.done;
 }
 
 // ==========================================

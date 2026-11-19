@@ -38,6 +38,7 @@ import {
   getSyncConfig,
   saveSyncConfig,
   getMeta,
+  bumpLocalRecordsUpdatedAt,
 } from '../storage/db';
 import {
   reconcilePhotosWithBottles,
@@ -391,10 +392,10 @@ async function executeFullSyncInternal(options: ExecuteFullSyncOptions): Promise
     return firstRes;
   };
 
-  // 2. ガード検証 (サンプルデータガード・空端末判定・開始時スナップショット)
+  // 2. ガード検証 (サンプルデータガード・空端末判定・復元クロックスキュー補正・開始時スナップショット)
   notify('checking_guards', 'ローカルデータの状態を確認中...');
-  const allBottles = await getAllBottles(true); // 論理削除含む全件
-  const allPhotos = await getAllPhotos();
+  let allBottles = await getAllBottles(true); // 論理削除含む全件
+  let allPhotos = await getAllPhotos();
   const isSampleLoaded = Boolean(await getMeta<boolean>('isSampleDataLoaded'));
 
   if (hasSampleDataRecords(allBottles) || isSampleLoaded) {
@@ -403,7 +404,39 @@ async function executeFullSyncInternal(options: ExecuteFullSyncOptions): Promise
     throw new Error(errMsg);
   }
 
-  const pendingDeletedPhotos = await getPendingDeletedPhotos();
+  let pendingDeletedPhotos = await getPendingDeletedPhotos();
+
+  // M1: バックアップ復元直後の同期では ping で serverTime を確認し、端末時計遅れを補正する
+  const pendingBackupRestoreAt = await getMeta<string>('pendingBackupRestoreAt');
+  let consumedBackupRestoreAt: string | undefined;
+  if (typeof pendingBackupRestoreAt === 'string' && pendingBackupRestoreAt.length > 0) {
+    const pingRes = await runGasWithAutoReauth<{ action: string; passphrase: string }, PingResponse>(
+      (passphrase) => ({
+        action: 'ping',
+        passphrase,
+      })
+    );
+    if (!pingRes.ok) {
+      const errMsg = extractGasErrorMessage(pingRes, 'サーバー時刻の確認に失敗しました');
+      notify('error', errMsg);
+      throw new Error(errMsg);
+    }
+
+    consumedBackupRestoreAt = pendingBackupRestoreAt;
+    if (pingRes.serverTime) {
+      const serverMs = Date.parse(pingRes.serverTime);
+      const restoreMs = Date.parse(pendingBackupRestoreAt);
+      if (Number.isFinite(serverMs) && (!Number.isFinite(restoreMs) || serverMs >= restoreMs)) {
+        const bumpedIso = new Date(serverMs + 1000).toISOString();
+        await bumpLocalRecordsUpdatedAt(bumpedIso);
+        consumedBackupRestoreAt = bumpedIso;
+        allBottles = await getAllBottles(true);
+        allPhotos = await getAllPhotos();
+        pendingDeletedPhotos = await getPendingDeletedPhotos();
+      }
+    }
+  }
+
   const isInitialEmptyClient = allBottles.length === 0 && pendingDeletedPhotos.length === 0;
 
   const snapshotBottleUpdatedAt: Record<string, string> = {};
@@ -632,6 +665,7 @@ async function executeFullSyncInternal(options: ExecuteFullSyncOptions): Promise
     syncedAtIso: metaResponse.syncedAt,
     snapshotBottleUpdatedAt,
     sentPendingDeletedPhotos,
+    consumedBackupRestoreAt,
   });
 
   const warnings: string[] = [];
