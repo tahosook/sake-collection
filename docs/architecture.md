@@ -9,7 +9,7 @@
 - TypeScript 5.x (strict) + React 18 + Vite（ローカルファースト PWA）
 - Tailwind CSS。モバイルファースト、タップ対象 44px 以上
 - ローカル DB：IndexedDB（idb ラッパー）。ボトルレコード・複数枚の写真・同期メタデータを保持
-- スキーマ・データ検証：純粋 TypeScript バリデータ（または zod）
+- スキーマ・データ検証：純粋 TypeScript バリデータ（`src/domain/validation.ts`）
 - 画像処理：Canvas API。リサイズ（長辺最大 1600px 目安）・JPEG/WebP 圧縮・EXIF 完全除去
 - テスト・品質検証：Vitest + ESLint + TypeScript (tsc --noEmit)
 - 同期バックエンド：Google Apps Script (GAS Web App) + Google Sheets + Google Drive
@@ -115,17 +115,17 @@ deleted: boolean;
 - 対象は「いま家にある酒」と「飲んだ記録」の両方（手放した酒は「飲んだ記録」画面内の切り替えで確認可能とする）
 - 対象フィールド：名前、蔵元、蒸留所、醸造所、ボデガ、産地、品種、特定名称、スタイル、タイプ、主なボタニカル、原材料・原料、等級
 
-## 4. 写真保存・Drive 連携・同期方式（設計確定・実装はステップ2／4）
+## 4. 写真保存・Drive 連携・同期方式（ステップ1〜4 実装済）
 
-開発ルールに従い、データモデルはステップ1の設計で同期前提に確定させるが、同期処理・同期マージ（syncMerge）のコード実装とその単体テストはステップ4まで入れない。
+開発ルールに従い、データモデルはステップ1の設計で同期前提に確定させ、ステップ2で写真ローカル保存、ステップ4で同期マージ（`src/domain/syncMerge.ts`）・GAS 連携（`gas/Code.gs`）・Cloudflare Access 保護（`functions/api/sync-config.ts`）を段階実装した（その後の堅牢化は `docs/audit-fixes-design.md` に記録）。
 
-### 写真保存の仕組み（ステップ2でローカル実装・ステップ4で Drive 連携）
+### 写真保存の仕組み（実装済）
 - 登録・編集時に選択された画像は、端末内の Canvas で長辺最大 1600px にリサイズし JPEG（品質 0.82 目安）に再エンコードすることで EXIF を完全に除去する
 - 端末内では IndexedDB の photos ストアに PhotoRecord として保存する
-- ステップ4の同期時には、Google Drive の本人専用・非公開フォルダ（共有リンク無効）に写真の実体ファイルを保存し、Sheets の Photos シートにはメタデータ（id, bottleId, driveFileId, contentHash, updatedAt, deleted）のみを記録する
+- 同期時には、Google Drive の本人専用・非公開フォルダ（共有リンク無効）に写真の実体ファイルを保存し、Sheets の Photos シートにはメタデータ（id, bottleId, driveFileId, contentHash, updatedAt, deleted）のみを記録する
 - 写真の取得も公開 URL ではなく、合言葉認証を通した GAS 経由とする
 
-### 同期・競合解決・初回同期・冪等性（ステップ4で実装）
+### 同期・競合解決・初回同期・冪等性（実装済）
 - トリガー：「今すぐ同期」ボタンの手動実行のみ
 - 競合解決：id ごとに updatedAt を比較し、新しい方を採用する（最終更新優先）
 - 論理削除の伝播：削除は deleted = true ＋ updatedAt 更新として記録し、同期で伝播させる

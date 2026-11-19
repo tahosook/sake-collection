@@ -7,7 +7,8 @@
 
 ## 1. ステップ3の実装棚卸しと残りの設計
 
-### (1) 現在の実装棚卸し（PR #1〜#9 時点）
+### (1) 設計策定時（PR #1〜#9 時点）の実装棚卸し
+> ※ステップ3残りおよびステップ4は PR #10〜#14 で実装済みです（その後の堅牢化修正の詳細は `docs/audit-fixes-design.md` を参照）。
 
 | 要件項目（docs/requirements.md §4 ステップ3） | 実装状況 | 該当箇所 | 今回の設計対象 |
 | :--- | :---: | :--- | :---: |
@@ -38,7 +39,7 @@
 
 - **単一エンドポイント**：GAS Web App のデプロイ URL に対する `POST` リクエスト。
 - **CORS プリフライト回避**：ブラウザからは `Content-Type: text/plain;charset=utf-8` で JSON 文字列を POST する（GAS は `OPTIONS` プリフライト非対応のため、Simple Request として送信して JSON レスポンスを受け取る Smart Closet と同方式）。
-- **排他制御**：書き込みを伴うアクションでは `LockService.getScriptLock().waitLock(25000)` を取得し、完了後に解放する。
+- **排他制御**：書き込みを伴うアクションでは `LockService.getScriptLock().tryLock(25000)` を取得し、完了後に解放する（取得失敗時は `LOCK_TIMEOUT` JSON を返す）。
 - **アクション一覧**：
   1. `ping`：合言葉の認証確認・シート／Drive フォルダの存在確認・サーバー側件数の取得。
   2. `sync_metadata`：全ボトルレコード（`BottleRecord[]`）および画像本体（`dataUrl`）を除いた全写真メタデータ（`PhotoSyncMeta[]`）を送受信し、LWW マージと Drive 不要ファイルのゴミ箱移動を行い、クライアントがアップロードすべき写真 ID リスト（`photosToUpload`）を返す。
@@ -123,7 +124,7 @@ export interface SyncConnectionConfig {
    - `bottle.photoIds` から外れた既存写真 `p` は、`p.driveFileId` の有無にかかわらず **ローカルの `photos` ストアからは即座に物理削除（`photoStore.delete(p.id)`）** する。これにより、編集直後に JSON バックアップを書き出しても「`parentBottle.photoIds` に含まれない写真が `photos` ストアに残る」という不整合は絶対に発生しない。
    - 外された写真 `p` が Drive 同期済み（`p.driveFileId !== null`）だった場合は、同一 IndexedDB トランザクション（`['bottles', 'photos', 'meta']`）内で、`meta` ストアの `'pendingDeletedPhotos'`（型：`PhotoSyncMeta[]`）に `{ ...pWithoutDataUrl, deleted: true, updatedAt: bottle.updatedAt }` を追記する。
 2. **ボトル自体を論理削除したとき（`deleteBottle`）**：
-   - 現行実装のとおり、`bottle.deleted = true` とし、`bottle.photoIds` は維持したまま、紐づく `photos` ストアの写真も `p.deleted = true, p.updatedAt = nowIso` に更新する（`b.photoIds` と `p.bottleId` の双方向整合はそのまま保たれる）。
+   - `bottle.deleted = true, updatedAt = nowIso, photoIds = [], primaryPhotoId = null` に正規化し、紐づく写真は `photos` ストアから即座に物理削除した上で、Drive 同期済み（`driveFileId !== null`）だった写真のみ `meta` ストアの `'pendingDeletedPhotos'` に退避する（`saveBottleWithPhotos` と方式を揃え、削除直後の JSON バックアップでも双方向参照整合性を保つ）。
 3. **同期マージ時（`src/domain/syncMerge.ts` および GAS `sync_metadata`）**：
    - **親ボトル `photoIds` による正規化ルール（`reconcilePhotosWithBottles`）**：
      ボトルの LWW マージ結果 `mergedBottles` が確定した後、写真の有効／削除状態は親ボトル `b = mergedBottles.get(photo.bottleId)` に従属して一意に正規化する：
@@ -296,7 +297,7 @@ sequenceDiagram
 ---
 
 ### PR #13 `feat/step4-sync-client-and-ui`（同期オーケストレーター・分割転送／再開・同期 UI）
-- **[NEW]** `src/storage/syncService.ts`：
+- **[NEW]** `src/services/syncService.ts`（旧パス参照向けの互換 re-export として `src/storage/syncService.ts` を配置）：
   - `/api/sync-config` 自動取得とローカル `meta` ストア管理
   - 4フェーズ同期（①メタデータ同期 → ②写真1枚ずつアップロード＆即時 `driveFileId` 保存 → ③写真3枚ずつチャンクダウンロード＆キャッシュ保存 → ④単一トランザクションコミット）
   - 途中失敗時のレジューム、サンプルデータ混入ブロック

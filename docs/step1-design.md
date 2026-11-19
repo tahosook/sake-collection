@@ -142,6 +142,6 @@ sake-collection/
 ├── eslint.config.js                 [PR#1]
 └── vite.config.ts                   [PR#1]
 ```
-※ src/domain/syncMerge.ts と tests/syncMerge.test.ts はステップ4で追加する。
+※ `src/domain/syncMerge.ts` と `tests/syncMerge.test.ts` はステップ4で追加済み（さらに GAS 本番実装テスト基盤 `tests/helpers/gasTestHarness.ts`・`tests/gasBackend.test.ts` も追加済み）。
 
-実データ・実写真はリポジトリに入れない。ローカル検証で使う場合はアプリの IndexedDB 内または .gitignore 対象の local-data/ のみに置き、verify-data でも自動検査する。
+実データ・実写真はリポジトリに入れない。ローカル検証で使う場合はアプリの IndexedDB 内または `.gitignore` 対象のルート直下 `local-data/` のみに置き、`verify:data` ではルート直下 `local-data/` をファイルシステム走査から除外しつつ `git ls-files -- local-data` による誤コミット検出と `dist/` 等への混入防止を自動検査する。

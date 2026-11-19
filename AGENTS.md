@@ -67,8 +67,9 @@
 - Antigravity の sake-collection プロジェクトに、Smart Closet と同等の承認設定（Allow：git 操作と検証コマンド等／Deny：force push・main 直 push・hard reset／File Writes：プロジェクトのワークスペースのみ）を入れる。検証コマンドが確定したら Allow リストと整合させ、設定した結果を記録する。ワークスペースの場所はその時点で確認する。
 - 作業の開始時と PR 作成前に、作業ディレクトリ・Git のリモート URL・ブランチが sake-collection のものであることを確認する。
 
-## 9. 後から足すルール（今は決めない）
+## 9. 運用・保守手順および記録の置き場所（確定事項）
 
-- デプロイ手順の詳細（ステップ4で必要になったら OPERATIONS 相当を用意する）。
-- GAS の再デプロイ手順（同期を入れるステップ4で決める）。
-- ステップ1〜3の間、アプリを実機で確認する方法（開発サーバー経由など。設計で決める）。
+- デプロイ手順の詳細（Cloudflare Pages＋Access 公開手順・実機確認手順・日常保守）の正本は `docs/step4-operations.md` とする。
+- GAS の再デプロイ手順（`clasp` 運用・`gas/appsscript.json` 確認・疎通確認・復旧手順）および合言葉変更・漏洩時の緊急対応手順も `docs/step4-operations.md` に従う。
+- 実データを使ったローカル検証は `.gitignore` 対象のルート直下 `local-data/` のみに置き、`npm run verify`（`scripts/verify-data.ts`）で `local-data/` の Git 未追跡および `dist/` 等への混入防止を機械検査する。
+- 本番・プレビュー環境で発生した障害・インシデント（過去の GAS `webapp` 設定欠落による 404 事故を含む）および設計・運用上の重要な判断の記録先は `docs/decisions-and-incidents.md` とする（公開リポジトリ上の秘匿情報・実データ非記載ルール §6 を厳守する）。
