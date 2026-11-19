@@ -808,5 +808,86 @@ describe('同期マージ純粋ドメインロジック (PR #11)', () => {
       expect(remainingPending).toHaveLength(1);
       expect(remainingPending[0]?.id).toBe(pRemovedId);
     });
+
+    it('S2: 同期中のローカル編集とリモート更新の updatedAt が同値でもローカルが保持され hasPendingLocalChanges: true が返ること', async () => {
+      const b1Id = '00000000-0000-4000-8000-000000000001';
+      const initialTime = '2026-11-09T10:00:00.000Z';
+      const sameTime = '2026-11-09T12:00:00.000Z';
+
+      const b1Initial = createTestBottle({
+        id: b1Id,
+        name: '同期前の酒',
+        updatedAt: initialTime,
+      });
+      await saveBottleWithPhotos(b1Initial, []);
+
+      const snapshotBottleUpdatedAt = { [b1Id]: initialTime };
+
+      // 同期中にローカルで編集（updatedAt = sameTime）
+      const b1LocalEdit = createTestBottle({
+        id: b1Id,
+        name: 'ローカル同時刻編集',
+        updatedAt: sameTime,
+      });
+      await saveBottleWithPhotos(b1LocalEdit, []);
+
+      // リモートからも同一時刻 (sameTime) の更新版が返る
+      const b1RemoteSameTime = createTestBottle({
+        id: b1Id,
+        name: 'リモート同時刻更新',
+        updatedAt: sameTime,
+      });
+
+      const commitResult = await commitSyncResultToDb({
+        bottles: [b1RemoteSameTime],
+        syncedAtIso: '2026-11-09T12:00:01.000Z',
+        snapshotBottleUpdatedAt,
+        sentPendingDeletedPhotos: [],
+      });
+
+      expect(commitResult.hasPendingLocalChanges).toBe(true);
+      expect((await getBottle(b1Id))?.name).toBe('ローカル同時刻編集');
+    });
+
+    it('S2: 同期中のローカル編集よりリモートの updatedAt が未来でもローカルが保持され hasPendingLocalChanges: true が返ること', async () => {
+      const b1Id = '00000000-0000-4000-8000-000000000001';
+      const initialTime = '2026-11-09T10:00:00.000Z';
+      const localEditTime = '2026-11-09T12:00:00.000Z';
+      const remoteFutureTime = '2026-11-09T15:00:00.000Z';
+
+      const b1Initial = createTestBottle({
+        id: b1Id,
+        name: '同期前の酒',
+        updatedAt: initialTime,
+      });
+      await saveBottleWithPhotos(b1Initial, []);
+
+      const snapshotBottleUpdatedAt = { [b1Id]: initialTime };
+
+      // 同期中にローカルで編集（updatedAt = localEditTime）
+      const b1LocalEdit = createTestBottle({
+        id: b1Id,
+        name: 'ローカル編集維持',
+        updatedAt: localEditTime,
+      });
+      await saveBottleWithPhotos(b1LocalEdit, []);
+
+      // 他端末の時計進み等により、リモート側がより未来の updatedAt を持つ
+      const b1RemoteFuture = createTestBottle({
+        id: b1Id,
+        name: 'リモート未来時刻更新',
+        updatedAt: remoteFutureTime,
+      });
+
+      const commitResult = await commitSyncResultToDb({
+        bottles: [b1RemoteFuture],
+        syncedAtIso: '2026-11-09T15:00:01.000Z',
+        snapshotBottleUpdatedAt,
+        sentPendingDeletedPhotos: [],
+      });
+
+      expect(commitResult.hasPendingLocalChanges).toBe(true);
+      expect((await getBottle(b1Id))?.name).toBe('ローカル編集維持');
+    });
   });
 });

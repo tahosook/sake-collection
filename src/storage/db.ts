@@ -10,7 +10,7 @@ import {
 } from '../types/sake';
 import { SAMPLE_BOTTLES, SAMPLE_PHOTOS } from '../data/sampleData';
 import { validateBackupData } from '../domain/validation';
-import { mergeBottleRecords, sanitizeDeletedBottle, toPhotoSyncMeta } from '../domain/syncMerge';
+import { sanitizeDeletedBottle, toPhotoSyncMeta } from '../domain/syncMerge';
 
 export const DB_NAME = 'sake-collection-db';
 export const DB_VERSION = 1;
@@ -584,11 +584,9 @@ export async function commitSyncResultToDb(input: CommitSyncResultInput): Promis
       const modifiedLocallyDuringSync = !wasInSnapshot || existingLocal.updatedAt !== snapshotUpdatedAt;
 
       if (modifiedLocallyDuringSync) {
-        const merged = mergeBottleRecords(existingLocal, sanitizedRemote);
-        if (merged.updatedAt !== sanitizedRemote.updatedAt || merged.deleted !== sanitizedRemote.deleted) {
-          hasPendingLocalChanges = true;
-        }
-        finalBottleMap.set(b.id, merged);
+        // 同期中にローカル変更が発生したレコードは、リモートの updatedAt が同値・未来であってもローカル版を保持する
+        finalBottleMap.set(b.id, sanitizeDeletedBottle(existingLocal));
+        hasPendingLocalChanges = true;
         continue;
       }
     }
