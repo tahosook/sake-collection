@@ -128,7 +128,7 @@
 - リサイズ・圧縮済みの写真は IndexedDB の photos ストアに PhotoRecord として保持。localStorage には保存しない。
 - PhotoRecord.bottleId は必ず親 BottleRecord.id と紐づく（バックアップ整合性 photo.bottleId === bottle.id を維持）。
 - 複数本一括登録や流用登録時は、各ボトルごとに独立した PhotoRecord（新しい UUID）を生成して保存。
-- ステップ2〜3（Drive同期前）において、ボトルの photoIds から外れた未同期写真は photos ストアから物理削除して容量圧迫とバックアップ不整合を防ぐ。ボトル自体の論理削除時は紐づく写真も論理削除（deleted = true）する。
+- ステップ2〜3（Drive同期前）において、ボトルの photoIds から外れた未同期写真は photos ストアから物理削除して容量圧迫とバックアップ不整合を防ぐ。ボトル自体の論理削除時は紐づく写真も論理削除（deleted = true）する。（※ステップ4の Drive 同期導入以降は、`deleteBottle` 時も `photoIds: [], primaryPhotoId: null` に正規化し、紐づく写真はローカル `photos` ストアから物理削除・Drive 同期済み写真のみ `pendingDeletedPhotos` へ退避する方式へ移行済み。正本は `docs/step3-4-design.md` §3(2)）。
 
 ---
 

@@ -34,7 +34,7 @@
 - **同一銘柄の本数まとめ登録の上限（10本）は不変**:
   - 既存の `createBottlesBatch`（同一銘柄の複数本一括登録）の上限 10本 は別機能として変更しない。本設計で上限 6本 とするのは Gemini 配列一括取り込みのみ。
 - **バックアップ取り込みとの境界分離**:
-  - バックアップ JSON の全件原子的取り込み（`backup.ts`）の厳格なスキーマ検証は不変。
+  - バックアップ JSON の全件原子的取り込み（`src/domain/validation.ts` の `validateBackupData` および `src/storage/db.ts` の `importBackupData`）の厳格なスキーマ検証は不変。
 - **手編集項目の保護と単一オブジェクト検証ルール**:
   - `mergeGeminiPayloadIntoBottle` の保護ルール、および必須項目・数値型・不要属性除外などの二段階検証ルールは不変。
 
@@ -238,14 +238,14 @@ flowchart LR
 
 ```mermaid
 graph LR
-    subgraph PR1["PR #16 (予定): ドメインロジック（配列検証・切り抜き計算） & 単体テスト"]
+    subgraph PR1["PR #16（実装済）: ドメインロジック（配列検証・切り抜き計算） & 単体テスト"]
         D1["photoUtils.ts<br/>(cropBox 座標変換・切り抜き関数)"]
         D2["geminiPrompt.ts<br/>(上限6本・配列検証・cropBox検証・プロンプト)"]
         D3["bottleUtils.ts<br/>(バッチボトル＋個別写真紐付け生成)"]
         T1["geminiBatchImport.test.ts<br/>(単体テスト一式)"]
     end
 
-    subgraph PR2["PR #17 (予定): UI コンポーネント & 統合"]
+    subgraph PR2["PR #17（実装済）: UI コンポーネント & 統合"]
         U1["GeminiBatchImportModal.tsx<br/>(切り抜きプレビュー・選択モーダル)"]
         U2["GeminiConsultSection.tsx<br/>(配列分岐・編集ガード)"]
         U3["BottleFormModal & App 統合"]
