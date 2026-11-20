@@ -746,7 +746,7 @@ export const BottleFormModal: React.FC<BottleFormModalProps> = ({
         aria-modal="true"
         aria-label={isEditing ? 'お酒の編集' : 'お酒の登録'}
       >
-        <div className="bg-white w-full max-w-lg h-full h-dvh max-h-dvh sm:h-auto sm:max-h-[92vh] sm:rounded-3xl flex flex-col shadow-2xl overflow-hidden animate-in fade-in duration-200">
+        <div className="bg-white w-full max-w-lg md:max-w-2xl lg:max-w-3xl h-full h-dvh max-h-dvh sm:h-auto sm:max-h-[92vh] sm:rounded-3xl flex flex-col shadow-2xl overflow-hidden animate-in fade-in duration-200">
           {/* ヘッダー */}
           <div className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-stone-200 px-4 py-3 flex items-center justify-between shrink-0">
             <div className="flex items-center gap-2">
@@ -937,45 +937,47 @@ export const BottleFormModal: React.FC<BottleFormModalProps> = ({
             {status !== 'unopened' && (
               <div className="p-3.5 bg-stone-50 rounded-2xl border border-stone-200 space-y-3">
                 <h3 className="text-xs font-bold text-stone-700">状態に関する日付</h3>
-                <div>
-                  <label className="block text-xs font-medium text-stone-600 mb-1">
-                    開封日（任意）
-                  </label>
-                  <input
-                    type="date"
-                    value={openedDate}
-                    onChange={(e) => setOpenedDate(e.target.value)}
-                    className="w-full min-h-touch px-3 py-2 bg-white border border-stone-300 rounded-xl text-sm"
-                  />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-stone-600 mb-1">
+                      開封日（任意）
+                    </label>
+                    <input
+                      type="date"
+                      value={openedDate}
+                      onChange={(e) => setOpenedDate(e.target.value)}
+                      className="w-full min-h-touch px-3 py-2 bg-white border border-stone-300 rounded-xl text-sm"
+                    />
+                  </div>
+
+                  {status === 'finished' && (
+                    <div>
+                      <label className="block text-xs font-medium text-stone-600 mb-1">
+                        飲み切り日（任意）
+                      </label>
+                      <input
+                        type="date"
+                        value={finishedDate}
+                        onChange={(e) => setFinishedDate(e.target.value)}
+                        className="w-full min-h-touch px-3 py-2 bg-white border border-stone-300 rounded-xl text-sm"
+                      />
+                    </div>
+                  )}
+
+                  {status === 'disposed' && (
+                    <div>
+                      <label className="block text-xs font-medium text-stone-600 mb-1">
+                        手放した日（任意）
+                      </label>
+                      <input
+                        type="date"
+                        value={disposedDate}
+                        onChange={(e) => setDisposedDate(e.target.value)}
+                        className="w-full min-h-touch px-3 py-2 bg-white border border-stone-300 rounded-xl text-sm"
+                      />
+                    </div>
+                  )}
                 </div>
-
-                {status === 'finished' && (
-                  <div>
-                    <label className="block text-xs font-medium text-stone-600 mb-1">
-                      飲み切り日（任意）
-                    </label>
-                    <input
-                      type="date"
-                      value={finishedDate}
-                      onChange={(e) => setFinishedDate(e.target.value)}
-                      className="w-full min-h-touch px-3 py-2 bg-white border border-stone-300 rounded-xl text-sm"
-                    />
-                  </div>
-                )}
-
-                {status === 'disposed' && (
-                  <div>
-                    <label className="block text-xs font-medium text-stone-600 mb-1">
-                      手放した日（任意）
-                    </label>
-                    <input
-                      type="date"
-                      value={disposedDate}
-                      onChange={(e) => setDisposedDate(e.target.value)}
-                      className="w-full min-h-touch px-3 py-2 bg-white border border-stone-300 rounded-xl text-sm"
-                    />
-                  </div>
-                )}
               </div>
             )}
 
@@ -1024,68 +1026,70 @@ export const BottleFormModal: React.FC<BottleFormModalProps> = ({
                 </p>
               </div>
 
-              <div>
-                <label className="block text-xs font-medium text-stone-700 mb-1">
-                  ① ひとことで
-                </label>
-                <textarea
-                  value={summary}
-                  onChange={(e) => {
-                    setSummary(e.target.value);
-                    markUserEdited('description.summary');
-                  }}
-                  placeholder="例: 洋梨のような華やかな香りと透明感のあるキレが際立つ一本"
-                  rows={2}
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs outline-none"
-                />
-              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-stone-700 mb-1">
+                    ① ひとことで
+                  </label>
+                  <textarea
+                    value={summary}
+                    onChange={(e) => {
+                      setSummary(e.target.value);
+                      markUserEdited('description.summary');
+                    }}
+                    placeholder="例: 洋梨のような華やかな香りと透明感のあるキレが際立つ一本"
+                    rows={2}
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs outline-none"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-xs font-medium text-stone-700 mb-1">
-                  ② 味わい
-                </label>
-                <textarea
-                  value={tasteProfile}
-                  onChange={(e) => {
-                    setTasteProfile(e.target.value);
-                    markUserEdited('description.tasteProfile');
-                  }}
-                  placeholder="例: 上品な甘みと爽やかな酸味が調和し、口に含むと心地よい余韻が続きます"
-                  rows={2}
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs outline-none"
-                />
-              </div>
+                <div>
+                  <label className="block text-xs font-medium text-stone-700 mb-1">
+                    ② 味わい
+                  </label>
+                  <textarea
+                    value={tasteProfile}
+                    onChange={(e) => {
+                      setTasteProfile(e.target.value);
+                      markUserEdited('description.tasteProfile');
+                    }}
+                    placeholder="例: 上品な甘みと爽やかな酸味が調和し、口に含むと心地よい余韻が続きます"
+                    rows={2}
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs outline-none"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-xs font-medium text-stone-700 mb-1">
-                  ③ 背景・歴史
-                </label>
-                <textarea
-                  value={background}
-                  onChange={(e) => {
-                    setBackground(e.target.value);
-                    markUserEdited('description.background');
-                  }}
-                  placeholder="例: 山口県岩国市の旭酒造が手掛ける純米大吟醸。山田錦を45%まで磨き上げて仕込んでいます"
-                  rows={2}
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs outline-none"
-                />
-              </div>
+                <div>
+                  <label className="block text-xs font-medium text-stone-700 mb-1">
+                    ③ 背景・歴史
+                  </label>
+                  <textarea
+                    value={background}
+                    onChange={(e) => {
+                      setBackground(e.target.value);
+                      markUserEdited('description.background');
+                    }}
+                    placeholder="例: 山口県岩国市の旭酒造が手掛ける純米大吟醸。山田錦を45%まで磨き上げて仕込んでいます"
+                    rows={2}
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs outline-none"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-xs font-medium text-stone-700 mb-1">
-                  ④ おすすめの飲み方
-                </label>
-                <textarea
-                  value={servingSuggestion}
-                  onChange={(e) => {
-                    setServingSuggestion(e.target.value);
-                    markUserEdited('description.servingSuggestion');
-                  }}
-                  placeholder="例: 10〜12℃に冷やしてワイングラスで楽しむのがおすすめ。白身魚の刺身やカルパッチョと好相性"
-                  rows={2}
-                  className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs outline-none"
-                />
+                <div>
+                  <label className="block text-xs font-medium text-stone-700 mb-1">
+                    ④ おすすめの飲み方
+                  </label>
+                  <textarea
+                    value={servingSuggestion}
+                    onChange={(e) => {
+                      setServingSuggestion(e.target.value);
+                      markUserEdited('description.servingSuggestion');
+                    }}
+                    placeholder="例: 10〜12℃に冷やしてワイングラスで楽しむのがおすすめ。白身魚の刺身やカルパッチョと好相性"
+                    rows={2}
+                    className="w-full px-3 py-2 bg-white border border-stone-300 rounded-xl text-xs outline-none"
+                  />
+                </div>
               </div>
 
               {/* 出典 URL リスト */}
@@ -1330,19 +1334,19 @@ export const BottleFormModal: React.FC<BottleFormModalProps> = ({
             )}
 
             {/* 送信ボタン */}
-            <div className="pt-2 flex gap-3">
+            <div className="pt-2 flex gap-3 md:justify-end">
               <button
                 type="button"
                 onClick={onClose}
                 disabled={isSubmitting}
-                className="w-1/3 min-h-touch bg-stone-200 hover:bg-stone-300 text-stone-800 font-semibold text-sm rounded-xl transition"
+                className="w-1/3 md:w-auto md:px-6 min-h-touch bg-stone-200 hover:bg-stone-300 text-stone-800 font-semibold text-sm rounded-xl transition"
               >
                 キャンセル
               </button>
               <button
                 type="submit"
                 disabled={isSubmitting || isProcessingPhotos}
-                className="w-2/3 min-h-touch bg-stone-900 hover:bg-stone-800 text-white font-bold text-sm rounded-xl transition shadow-sm flex items-center justify-center gap-2"
+                className="w-2/3 md:w-auto md:min-w-[200px] md:px-6 min-h-touch bg-stone-900 hover:bg-stone-800 text-white font-bold text-sm rounded-xl transition shadow-sm flex items-center justify-center gap-2"
               >
                 {isSubmitting ? (
                   <span>保存中...</span>

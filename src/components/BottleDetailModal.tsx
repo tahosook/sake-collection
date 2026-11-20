@@ -100,7 +100,7 @@ export const BottleDetailModal: React.FC<BottleDetailModalProps> = ({
       aria-modal="true"
       aria-label="ボトル詳細"
     >
-      <div className="bg-white w-full max-w-lg h-full h-dvh max-h-dvh sm:h-auto sm:max-h-[92vh] sm:rounded-3xl flex flex-col shadow-2xl overflow-hidden animate-in fade-in duration-200">
+      <div className="bg-white w-full max-w-lg md:max-w-3xl lg:max-w-4xl xl:max-w-5xl h-full h-dvh max-h-dvh sm:h-auto sm:max-h-[92vh] sm:rounded-3xl flex flex-col shadow-2xl overflow-hidden animate-in fade-in duration-200">
         {/* モーダルヘッダー */}
         <div className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-stone-200 px-4 py-3 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
@@ -150,9 +150,10 @@ export const BottleDetailModal: React.FC<BottleDetailModalProps> = ({
         </div>
 
         {/* スクロール可能コンテンツ */}
-        <div className="p-4 sm:p-6 pb-8 sm:pb-6 space-y-6 overflow-y-auto flex-1">
-          {/* 1. 写真ビューア */}
-          <div className="space-y-2">
+        <div className="p-4 sm:p-6 pb-8 sm:pb-6 overflow-y-auto flex-1">
+          <div className="space-y-6 md:space-y-0 md:grid md:grid-cols-[5fr_7fr] md:gap-6 lg:gap-8 md:items-start">
+            {/* 1. 写真ビューア（md以上は左ペインとしてスクロール追従） */}
+            <div className="space-y-2 min-w-0 md:sticky md:top-0">
             <div className="relative aspect-square w-full bg-stone-100 rounded-2xl overflow-hidden border border-stone-200 flex items-center justify-center">
               {activePhoto ? (
                 <img
@@ -199,8 +200,10 @@ export const BottleDetailModal: React.FC<BottleDetailModalProps> = ({
                 ))}
               </div>
             )}
-          </div>
+            </div>
 
+            {/* 右ペイン: 銘柄名〜購入情報・相場目安 */}
+            <div className="space-y-6 min-w-0">
           {/* 2. 銘柄名と基本スペック */}
           <div>
             <h1 className="text-xl sm:text-2xl font-bold text-stone-900 leading-snug">
@@ -488,14 +491,16 @@ export const BottleDetailModal: React.FC<BottleDetailModalProps> = ({
               )}
             </div>
           </div>
+            </div>
+          </div>
         </div>
 
         {/* モーダルフッター */}
-        <div className="p-3 bg-stone-50 border-t border-stone-200 flex gap-2 shrink-0">
+        <div className="p-3 bg-stone-50 border-t border-stone-200 flex gap-2 md:justify-end shrink-0">
           <button
             type="button"
             onClick={onClose}
-            className="w-full min-h-touch bg-stone-200 hover:bg-stone-300 text-stone-800 font-semibold text-sm rounded-xl transition"
+            className="w-full md:w-auto md:min-w-[140px] md:px-6 min-h-touch bg-stone-200 hover:bg-stone-300 text-stone-800 font-semibold text-sm rounded-xl transition"
           >
             閉じる
           </button>

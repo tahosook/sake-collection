@@ -55,7 +55,7 @@ export const ReuseBottlePickerModal: React.FC<ReuseBottlePickerModalProps> = ({
       aria-modal="true"
       aria-label="流用元の銘柄を選択"
     >
-      <div className="bg-white w-full max-w-lg h-full h-dvh max-h-dvh sm:h-auto sm:max-h-[90vh] sm:rounded-3xl flex flex-col shadow-2xl overflow-hidden animate-in fade-in duration-200">
+      <div className="bg-white w-full max-w-lg md:max-w-2xl h-full h-dvh max-h-dvh sm:h-auto sm:max-h-[90vh] sm:rounded-3xl flex flex-col shadow-2xl overflow-hidden animate-in fade-in duration-200">
         {/* ヘッダー */}
         <div className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-stone-200 px-4 py-3 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
@@ -116,7 +116,7 @@ export const ReuseBottlePickerModal: React.FC<ReuseBottlePickerModalProps> = ({
           </div>
 
           {/* 種類ピルボタン */}
-          <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+          <div className="flex gap-1.5 overflow-x-auto md:overflow-visible md:flex-wrap pb-1 scrollbar-none">
             <button
               type="button"
               onClick={() => setSelectedCategory('all')}
@@ -215,11 +215,11 @@ export const ReuseBottlePickerModal: React.FC<ReuseBottlePickerModalProps> = ({
         </div>
 
         {/* フッター */}
-        <div className="p-3 bg-stone-50 border-t border-stone-200 shrink-0">
+        <div className="p-3 bg-stone-50 border-t border-stone-200 md:flex md:justify-end shrink-0">
           <button
             type="button"
             onClick={onClose}
-            className="w-full min-h-touch bg-stone-200 hover:bg-stone-300 text-stone-800 font-semibold text-xs rounded-xl transition"
+            className="w-full md:w-auto md:min-w-[140px] md:px-6 min-h-touch bg-stone-200 hover:bg-stone-300 text-stone-800 font-semibold text-xs rounded-xl transition"
           >
             キャンセル
           </button>
