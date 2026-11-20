@@ -211,7 +211,7 @@ export const GeminiBatchImportModal: React.FC<GeminiBatchImportModalProps> = ({
       aria-modal="true"
       aria-label="複数銘柄の一括取り込み"
     >
-      <div className="bg-white w-full max-w-2xl h-full h-dvh max-h-dvh sm:h-auto sm:max-h-[92vh] sm:rounded-3xl flex flex-col shadow-2xl overflow-hidden animate-in fade-in duration-200">
+      <div className="bg-white w-full max-w-2xl lg:max-w-4xl h-full h-dvh max-h-dvh sm:h-auto sm:max-h-[92vh] sm:rounded-3xl flex flex-col shadow-2xl overflow-hidden animate-in fade-in duration-200">
         {/* ヘッダー */}
         <div className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-stone-200 px-4 py-3 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
@@ -330,14 +330,14 @@ export const GeminiBatchImportModal: React.FC<GeminiBatchImportModalProps> = ({
           )}
 
           {/* 各ボトルのプレビューカード一覧 */}
-          <div className="space-y-3">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 items-start">
             {batchResult.items.map((item, idx) => {
               if (!item.success) {
                 // 無効な要素（赤枠エラー表示・選択不可）
                 return (
                   <div
                     key={`invalid-${idx}`}
-                    className="p-4 rounded-2xl border-2 border-rose-300 bg-rose-50/60 space-y-2"
+                    className="min-w-0 p-4 rounded-2xl border-2 border-rose-300 bg-rose-50/60 space-y-2"
                   >
                     <div className="flex items-center gap-2 text-rose-800 font-bold text-xs">
                       <span className="px-2 py-0.5 bg-rose-200 text-rose-900 rounded-md">
@@ -377,7 +377,7 @@ export const GeminiBatchImportModal: React.FC<GeminiBatchImportModalProps> = ({
               return (
                 <div
                   key={`valid-${idx}`}
-                  className={`p-4 rounded-2xl border transition space-y-3.5 ${
+                  className={`min-w-0 p-4 rounded-2xl border transition space-y-3.5 ${
                     isSelected
                       ? 'border-stone-900 bg-white shadow-sm ring-1 ring-stone-900/10'
                       : 'border-stone-200 bg-stone-50/70 opacity-75'
@@ -555,12 +555,12 @@ export const GeminiBatchImportModal: React.FC<GeminiBatchImportModalProps> = ({
         </div>
 
         {/* 固定フッター */}
-        <div className="sticky bottom-0 z-20 bg-white/95 backdrop-blur border-t border-stone-200 px-4 py-3 shrink-0 flex items-center justify-between gap-3">
+        <div className="sticky bottom-0 z-20 bg-white/95 backdrop-blur border-t border-stone-200 px-4 py-3 shrink-0 flex items-center justify-between md:justify-end gap-3">
           <button
             type="button"
             onClick={onClose}
             disabled={isSubmitting}
-            className="w-1/3 min-h-touch bg-stone-200 hover:bg-stone-300 text-stone-800 font-semibold text-xs sm:text-sm rounded-xl transition"
+            className="w-1/3 md:w-auto md:px-6 min-h-touch bg-stone-200 hover:bg-stone-300 text-stone-800 font-semibold text-xs sm:text-sm rounded-xl transition"
           >
             キャンセル
           </button>
@@ -568,7 +568,7 @@ export const GeminiBatchImportModal: React.FC<GeminiBatchImportModalProps> = ({
             type="button"
             disabled={selectedCount === 0 || isSubmitting || isCropping}
             onClick={handleSubmit}
-            className="w-2/3 min-h-touch bg-stone-900 hover:bg-stone-800 disabled:bg-stone-300 text-white font-bold text-xs sm:text-sm rounded-xl transition shadow-sm flex items-center justify-center gap-2"
+            className="w-2/3 md:w-auto md:min-w-[240px] md:px-6 min-h-touch bg-stone-900 hover:bg-stone-800 disabled:bg-stone-300 text-white font-bold text-xs sm:text-sm rounded-xl transition shadow-sm flex items-center justify-center gap-2"
           >
             {isSubmitting ? (
               <span>登録中...</span>

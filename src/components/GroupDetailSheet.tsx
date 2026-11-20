@@ -25,7 +25,7 @@ export const GroupDetailSheet: React.FC<GroupDetailSheetProps> = ({
       aria-modal="true"
       aria-label="同一銘柄の個別一覧"
     >
-      <div className="bg-white w-full max-w-lg rounded-t-3xl sm:rounded-3xl max-h-[85vh] max-h-[85dvh] flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom-6 duration-200">
+      <div className="bg-white w-full max-w-lg md:max-w-xl rounded-t-3xl sm:rounded-3xl max-h-[85vh] max-h-[85dvh] flex flex-col shadow-2xl overflow-hidden animate-in slide-in-from-bottom-6 duration-200">
         {/* シートヘッダー */}
         <div className="p-4 sm:p-5 border-b border-stone-200 flex items-start justify-between gap-3 bg-stone-50 shrink-0">
           <div>
@@ -116,11 +116,11 @@ export const GroupDetailSheet: React.FC<GroupDetailSheetProps> = ({
         </div>
 
         {/* シートフッター */}
-        <div className="p-3 bg-stone-50 border-t border-stone-200 text-center">
+        <div className="p-3 bg-stone-50 border-t border-stone-200 text-center md:flex md:justify-end shrink-0">
           <button
             type="button"
             onClick={onClose}
-            className="w-full min-h-touch bg-stone-200 hover:bg-stone-300 text-stone-800 font-semibold text-sm rounded-xl transition"
+            className="w-full md:w-auto md:min-w-[140px] md:px-6 min-h-touch bg-stone-200 hover:bg-stone-300 text-stone-800 font-semibold text-sm rounded-xl transition"
           >
             閉じる
           </button>
