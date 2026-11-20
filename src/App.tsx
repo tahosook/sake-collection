@@ -243,7 +243,7 @@ export const App: React.FC = () => {
     <div className="min-h-screen bg-stone-100 text-stone-900 pb-24 select-none sm:select-auto">
       {/* グローバルヘッダー */}
       <header className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-stone-200">
-        <div className="max-w-md mx-auto px-4 py-3 flex items-center justify-between">
+        <div className="max-w-md sm:max-w-2xl md:max-w-4xl lg:max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
           <div>
             <h1 className="text-base font-black text-stone-900 tracking-tight">
               sake-collection
@@ -259,7 +259,7 @@ export const App: React.FC = () => {
       </header>
 
       {/* メインエリア */}
-      <main className="max-w-md mx-auto p-4 space-y-4">
+      <main className="max-w-md sm:max-w-2xl md:max-w-4xl lg:max-w-6xl mx-auto p-4 sm:px-6 sm:py-5 space-y-4">
         {/* エラー表示 */}
         {error && (
           <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-xl font-medium">
@@ -269,7 +269,7 @@ export const App: React.FC = () => {
 
         {/* データゼロ時の初期案内バナー（未読込・空端末対応） */}
         {!isLoading && allBottles.length === 0 && (
-          <div className="bg-white p-5 rounded-2xl border border-stone-200 shadow-sm text-center space-y-3">
+          <div className="max-w-md mx-auto bg-white p-5 rounded-2xl border border-stone-200 shadow-sm text-center space-y-3">
             <div className="w-10 h-10 mx-auto rounded-xl bg-amber-50 border border-amber-200 text-amber-900 flex items-center justify-center">
               <CloudIcon className="w-6 h-6" />
             </div>
@@ -377,7 +377,7 @@ export const App: React.FC = () => {
             {activeTab === 'finished' && (
               <div className="space-y-3">
                 {/* 飲んだ / 手放した 切り替えタブ */}
-                <div className="grid grid-cols-2 p-1 bg-stone-200/80 rounded-xl gap-1">
+                <div className="grid grid-cols-2 md:max-w-md p-1 bg-stone-200/80 rounded-xl gap-1">
                   <button
                     type="button"
                     onClick={() => setHistorySubTab('finished')}

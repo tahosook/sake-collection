@@ -17,6 +17,7 @@ https://sake-collection-cs2.pages.dev/ （Cloudflare Pages で公開中。利用
 - [Gemini 一括取り込み 機能詳細設計](docs/gemini-batch-import-design.md)
 - [PWA 化 詳細設計書](docs/pwa-design.md)
 - [全体点検修正 設計書](docs/audit-fixes-design.md)
+- [ワイド画面レイアウト変更 設計書](docs/wide-layout-design.md)
 - [障害・設計判断ログ](docs/decisions-and-incidents.md)
 - [公開・運用手順書](docs/step4-operations.md)
 - 開発ルール：[AGENTS.md](AGENTS.md)

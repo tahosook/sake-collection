@@ -242,7 +242,7 @@ export const DataManagementView: React.FC<DataManagementViewProps> = ({
   const disposedCount = bottles.filter((b) => b.status === 'disposed').length;
 
   return (
-    <div className="space-y-6">
+    <div className="max-w-3xl mx-auto space-y-6">
       {/* メッセージ通知バナー */}
       {statusMessage && (
         <div
@@ -271,75 +271,77 @@ export const DataManagementView: React.FC<DataManagementViewProps> = ({
 
       {/* クラウド同期カード ＆ 折りたたみ（設定・バックアップ・初期化） */}
       <SyncSection onSyncComplete={onSyncComplete}>
-        {/* バックアップ操作カード */}
-        <div className="bg-white p-5 rounded-2xl border border-stone-200 shadow-sm space-y-4">
-          <div>
-            <h3 className="text-sm font-bold text-stone-900">データバックアップ (JSON)</h3>
-            <p className="text-xs text-stone-500 mt-1 leading-relaxed">
-              端末内の全お酒レコードおよび写真を JSON 形式で保存・復元できます。
-              復元時は厳密な整合性検証が行われ、不正なファイルで既存データが壊れることはありません。
-            </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* バックアップ操作カード */}
+          <div className="bg-white p-5 rounded-2xl border border-stone-200 shadow-sm space-y-4 flex flex-col justify-between">
+            <div>
+              <h3 className="text-sm font-bold text-stone-900">データバックアップ (JSON)</h3>
+              <p className="text-xs text-stone-500 mt-1 leading-relaxed">
+                端末内の全お酒レコードおよび写真を JSON 形式で保存・復元できます。
+                復元時は厳密な整合性検証が行われ、不正なファイルで既存データが壊れることはありません。
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              {/* 書き出しボタン */}
+              <button
+                type="button"
+                onClick={handleExport}
+                disabled={isProcessing}
+                className="w-full min-h-touch bg-stone-900 hover:bg-stone-800 disabled:bg-stone-400 text-white font-bold text-sm px-4 py-3 rounded-xl transition flex items-center justify-center gap-2 shadow-sm"
+              >
+                <DownloadIcon className="w-5 h-5" />
+                <span>バックアップを書き出す（JSON）</span>
+              </button>
+
+              {/* 読み込みボタン (ファイルピッカー) */}
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileChange}
+                accept=".json,application/json"
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isProcessing}
+                className="w-full min-h-touch bg-stone-100 hover:bg-stone-200 disabled:opacity-50 text-stone-800 font-bold text-sm px-4 py-3 rounded-xl border border-stone-300 transition flex items-center justify-center gap-2"
+              >
+                <UploadIcon className="w-5 h-5" />
+                <span>バックアップを読み込む（復元）</span>
+              </button>
+            </div>
           </div>
 
-          <div className="space-y-3">
-            {/* 書き出しボタン */}
-            <button
-              type="button"
-              onClick={handleExport}
-              disabled={isProcessing}
-              className="w-full min-h-touch bg-stone-900 hover:bg-stone-800 disabled:bg-stone-400 text-white font-bold text-sm px-4 py-3 rounded-xl transition flex items-center justify-center gap-2 shadow-sm"
-            >
-              <DownloadIcon className="w-5 h-5" />
-              <span>バックアップを書き出す（JSON）</span>
-            </button>
+          {/* サンプルデータ・データリセットカード */}
+          <div className="bg-white p-5 rounded-2xl border border-stone-200 shadow-sm space-y-4 flex flex-col justify-between">
+            <div>
+              <h3 className="text-sm font-bold text-stone-900">サンプルデータと初期化</h3>
+              <p className="text-xs text-stone-500 mt-1 leading-relaxed">
+                受入確認用の各種お酒（日本酒・ワイン・ウイスキー等、全4状態、ヴィンテージ違い等）をワンタップで読み込めます。
+              </p>
+            </div>
 
-            {/* 読み込みボタン (ファイルピッカー) */}
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleFileChange}
-              accept=".json,application/json"
-              className="hidden"
-            />
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isProcessing}
-              className="w-full min-h-touch bg-stone-100 hover:bg-stone-200 disabled:opacity-50 text-stone-800 font-bold text-sm px-4 py-3 rounded-xl border border-stone-300 transition flex items-center justify-center gap-2"
-            >
-              <UploadIcon className="w-5 h-5" />
-              <span>バックアップを読み込む（復元）</span>
-            </button>
-          </div>
-        </div>
+            <div className="space-y-3">
+              <button
+                type="button"
+                onClick={handleResetSample}
+                disabled={isProcessing}
+                className="w-full min-h-touch bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-sm px-4 py-3 rounded-xl transition flex items-center justify-center gap-2"
+              >
+                <span>受入確認用サンプルデータを読み込む</span>
+              </button>
 
-        {/* サンプルデータ・データリセットカード */}
-        <div className="bg-white p-5 rounded-2xl border border-stone-200 shadow-sm space-y-4">
-          <div>
-            <h3 className="text-sm font-bold text-stone-900">サンプルデータと初期化</h3>
-            <p className="text-xs text-stone-500 mt-1 leading-relaxed">
-              受入確認用の各種お酒（日本酒・ワイン・ウイスキー等、全4状態、ヴィンテージ違い等）をワンタップで読み込めます。
-            </p>
-          </div>
-
-          <div className="space-y-3">
-            <button
-              type="button"
-              onClick={handleResetSample}
-              disabled={isProcessing}
-              className="w-full min-h-touch bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold text-sm px-4 py-3 rounded-xl transition flex items-center justify-center gap-2"
-            >
-              <span>受入確認用サンプルデータを読み込む</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleClearAll}
-              disabled={isProcessing}
-              className="w-full min-h-touch bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 font-bold text-sm px-4 py-3 rounded-xl transition flex items-center justify-center gap-2"
-            >
-              <span>全データを削除して初期化</span>
-            </button>
+              <button
+                type="button"
+                onClick={handleClearAll}
+                disabled={isProcessing}
+                className="w-full min-h-touch bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 font-bold text-sm px-4 py-3 rounded-xl transition flex items-center justify-center gap-2"
+              >
+                <span>全データを削除して初期化</span>
+              </button>
+            </div>
           </div>
         </div>
       </SyncSection>

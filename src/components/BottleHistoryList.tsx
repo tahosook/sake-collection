@@ -42,7 +42,7 @@ export const BottleHistoryList: React.FC<BottleHistoryListProps> = ({
   }
 
   return (
-    <div className="space-y-2.5">
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 md:gap-3.5">
       {sortedBottles.map((bottle) => {
         const primaryPhotoId = bottle.primaryPhotoId ?? bottle.photoIds[0];
         const photo = primaryPhotoId ? photoMap.get(primaryPhotoId) : undefined;
@@ -54,7 +54,7 @@ export const BottleHistoryList: React.FC<BottleHistoryListProps> = ({
             key={bottle.id}
             type="button"
             onClick={() => onSelectBottle(bottle)}
-            className="w-full min-h-touch text-left p-3 bg-white rounded-2xl border border-stone-200 hover:border-stone-400 shadow-sm hover:shadow transition active:scale-[0.99] flex items-center gap-3.5"
+            className="w-full min-w-0 h-full min-h-touch text-left p-3 bg-white rounded-2xl border border-stone-200 hover:border-stone-400 shadow-sm hover:shadow transition active:scale-[0.99] flex items-center gap-3.5"
           >
             {/* サムネイル */}
             <div className="w-14 h-[72px] rounded-xl bg-stone-100 overflow-hidden shrink-0 flex items-center justify-center border border-stone-200">

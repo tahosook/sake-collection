@@ -65,7 +65,7 @@ export const Navigation: React.FC<NavigationProps> = ({
       className="fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur border-t border-stone-200"
       aria-label="主要ナビゲーション"
     >
-      <div className="max-w-md mx-auto grid grid-cols-4 px-1 py-1">
+      <div className="max-w-md sm:max-w-2xl md:max-w-4xl lg:max-w-6xl mx-auto grid grid-cols-4 px-1 sm:px-6 py-1">
         {navItems.map((item) => {
           return (
             <button
